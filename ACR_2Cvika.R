@@ -9,7 +9,7 @@
 #' ## 1. Elementary Modeling by an AR Process ## 
 #' We begin by extracting the data from a downloaded file
 
-setwd("D:/Martin/Docs/R/ACR2 unemployment quarterly")
+setwd("D:/Martin Data/TimeSeriesAnalysis/ACR_2Repo")
 dat <- read.table("LFS_unemployment.csv", header=F, skip=6, sep = ",", as.is = T)
 dat <- dat[50:239,]
 names(dat) <- c("quartile", "unemp")
