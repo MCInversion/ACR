@@ -250,11 +250,15 @@ EstimSETAR <- function(x, p, d, c) {
     resultModel$residuals <- (y - skel)
     resultModel$resSigmaSq <- 1 / (n - k) * sum(resultModel$residuals ^ 2)
     
-    resultModel$n1 <- sum(apply(y, MARGIN = 1, function(x) (1 - Indicator(x, c))))
-    resultModel$n2 <- sum(apply(y, MARGIN = 1, function(x) Indicator(x, c)))
+    resultModel$n1 <- sum(apply(as.matrix(x), MARGIN = 1, function(xt) (1 - Indicator(xt, c))))
+    resultModel$n2 <- sum(apply(as.matrix(x), MARGIN = 1, function(xt) Indicator(xt, c)))
     
-    resultModel$resSigmaSq1 <- sum(apply(y, MARGIN = 1, function(x) ifelse((1 - Indicator(x, c)),(x - skel)^2, 0))) / resultModel$n1
-    resultModel$resSigmaSq2 <- sum(apply(y, MARGIN = 1, function(x) ifelse(Indicator(x, c),(x - skel)^2, 0))) / resultModel$n2
+    resultModel$resSigmaSq1 <- sum(
+      apply(as.matrix(seq_along(y)), MARGIN = 1,
+      function(t) ifelse((1 - Indicator(y[t], c)), (y[t] - skel[t])^2, 0))) / (resultModel$n1 - k)
+    resultModel$resSigmaSq2 <- sum(
+      apply(as.matrix(seq_along(y)), MARGIN = 1,
+            function(t) ifelse(Indicator(y[t], c),(y[t] - skel[t])^2, 0))) / (resultModel$n2 - k)
     
     return(resultModel)
   } else {
