@@ -224,78 +224,47 @@ BIC_SETAR(c(2, 2), c(10, 10), c(0.5, 0.7))
 #' ### 2.2: The Estimation of Parameters of a SETAR Model  ###
 #' 
 #' Given a dataset `x` and parameters `p` (AR order), `d` (SETAR delay), and the threshold `c` we find the coefficients
-#' of a SETAR model with these parameters by performing a multivariate linear regression. The coefficient vector`Phi`
-#' is the vector of unknowns of a linear system with a square matrix `Y` and a right-hand-side vector `X` 
-#' given by the time series. Although for higher values of `p` the inversion of matrix `Y'Y` (with dimensions 
-#' `(2*p + 2)`x`(2*p + 2)`) might be computationally demanding, we will determine the covariance matrix, i.e.: `(Y'Y)^(-1)`
+#' of a SETAR model with these parameters by performing a multivariate linear regression. The coefficient vector`PhiParams`
+#' is the vector of unknowns of a linear system with matrix `X` and a right-hand-side vector `y` 
+#' given by the time series. Although for higher values of `p` the inversion of matrix `X'X` (with dimensions 
+#' `(2*p + 2)`x`(2*p + 2)`) might be computationally demanding, we will determine the covariance matrix, i.e.: `(X'X)^(-1)`
 #' using a function `inv` from the `matlib` package:
 
 suppressMessages(library(matlib))
 
 EstimSETAR <- function(x, p, d, c) {
   resultModel <- list()
-  resultModel$p <- p; resultModel$d <- d; resultModel$c <- c;
-  resultModel$data <- x
-  
-  n <- length(x)
-  resultModel$n <- n
-  Yc <- matrix(0., ncol = (2 * p + 2), nrow = (2 * p + 2)) # this will become the covariance matrix
-  Xc <- matrix(0., nrow = (2 * p + 2)) # this will become the rhs vector
-  Y <- matrix(0., ncol = (2 * p + 2), nrow = n) # matrix of basis vectors
+  resultModel$p = p; resultModel$d = d; resultModel$c = c;
+  resultModel$data = x;  n = length(x);  resultModel$n = n;
   k <- max(p, d)
-  n1 <- 0; n2 <- 0;
-  i <- 1
-  for (t in (k + 1):n) {
-    XT <- Xt(x, t, p, d, c)
-    if (Indicator(x[t], c) == 1) {
-      n1 <- (n1 + 1)
-    } else {
-      n2 <- (n2 + 1)
-    }
-    Y[i,] <- XT
-    Yc <- Yc + (XT %o% XT)
-    Xc <- Xc + XT * x[t]
-    i <- (i + 1)
-  }
-  resultModel$n1 <- n1; resultModel$n2 <- n2;
-  detYc <- det(Yc)
-  if (detYc < 0.00001 && detYc > -0.00001) {
-    return(NA)
-  } else {
-    resultModel$CovMatrix <- inv(Yc)
-    resultModel$PhiParams <- resultModel$CovMatrix %*% Xc
-    resultModel$PhiStErrors <- sqrt(diag(resultModel$CovMatrix)) / sqrt(n)
-    z <- array()
-    for (t in 1:(n - k)) {
-      z[t] <- crossprod(Y[t,], resultModel$PhiParams)
-    }
-    resultModel$residuals <- (x[(k + 1):n] - z)
+  
+  X <- as.matrix(apply(as.matrix((k + 1):n), MARGIN=1, function(t) Xt(x, t, p, d, c) ))
+  y <- as.matrix(x[(k + 1):n])
+  
+  A = crossprod(t(X), t(X));  b = crossprod(t(X), y)
+
+  if (abs(det(A)) > 0.000001) {
+    resultModel$PhiParams <- solve(A, b) # solving (X'X)*phi = X'y
+    resultModel$PhiStErrors <- sqrt(diag(inv(A)) / n)  # standard errors
+    skel <- crossprod(X, resultModel$PhiParams)
+    resultModel$residuals <- (y - skel)
     resultModel$resSigmaSq <- 1 / (n - k) * sum(resultModel$residuals ^ 2)
     
-    resultModel$resSigmaSq1 <- 0.
-    resultModel$resSigmaSq2 <- 0.
-    for (t in 1:(n - k)) {
-      if (Indicator(x[t], c) == 1) {
-        resultModel$resSigmaSq1 <- resultModel$resSigmaSq1 + (x[t] - z[t])^2
-      } else {
-        resultModel$resSigmaSq2 <- resultModel$resSigmaSq2 + (x[t] - z[t])^2
-      }
-    }
-    resultModel$resSigmaSq1 <- resultModel$resSigmaSq1 / (n1 - k)
-    resultModel$resSigmaSq2 <- resultModel$resSigmaSq2 / (n2 - k)
-    if (resultModel$resSigmaSq1 > 0.00001 && resultModel$resSigmaSq2 > 0.00001) {
-      resultModel$AIC <- AIC_SETAR(c(p, p), c(n1, n2), c(resultModel$resSigmaSq1, resultModel$resSigmaSq2))
-      resultModel$BIC <- BIC_SETAR(c(p, p), c(n1, n2), c(resultModel$resSigmaSq1, resultModel$resSigmaSq2)) 
-    } else {
-      resultModel$AIC <- NA; resultModel$BIC <- NA;
-    }
+    resultModel$n1 <- sum(apply(y, MARGIN = 1, function(x) (1 - Indicator(x, c))))
+    resultModel$n2 <- sum(apply(y, MARGIN = 1, function(x) Indicator(x, c)))
+    
+    resultModel$resSigmaSq1 <- sum(apply(y, MARGIN = 1, function(x) ifelse((1 - Indicator(x, c)),(x - skel)^2, 0))) / resultModel$n1
+    resultModel$resSigmaSq2 <- sum(apply(y, MARGIN = 1, function(x) ifelse(Indicator(x, c),(x - skel)^2, 0))) / resultModel$n2
+    
     return(resultModel)
+  } else {
+    return(NA)
   }
 }
 
 #' and now we test the function for suitable parameters:
 
-str(EstimSETAR(xt, 1, 1, c=0))
+str(EstimSETAR(xt, 2, 1, c=0))
 
 
 #' It should be noted that for some values of `p` and `d` the indices of arrays in the algorithms might 
@@ -306,6 +275,7 @@ str(EstimSETAR(xt, 1, 1, c=0))
 #' 
 #' To answer the question: 'how does one find the right parameters `p`, `d` and `c` for their desired SETAR model?',
 #' we implement the following procedure:
+#' 
 #' 
 
 pmax <- 7 # set maximum order p
@@ -334,6 +304,8 @@ for (p in 1:pmax) {
     # only the model whose parameter c gives the lowest residual square sum is chosen
     if (sigma < 100.) {
       models[[id]] <- EstimSETAR(xt, p, d, c_estim)
+      models[[id]]$AIC <- AIC_SETAR(c(p, p), c(models[[id]]$n1, models[[id]]$n2), c(resultModel$resSigmaSq1, resultModel$resSigmaSq2))
+      models[[id]]$BIC <- BIC_SETAR(c(p, p), c(models[[id]]$n1, models[[id]]$n2), c(resultModel$resSigmaSq1, resultModel$resSigmaSq2))
       modelColumns[[id]] <- c(
         models[[id]]$p, models[[id]]$d, models[[id]]$c,
         models[[id]]$n1, models[[id]]$n2, models[[id]]$AIC, models[[id]]$BIC,
