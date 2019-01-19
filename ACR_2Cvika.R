@@ -285,36 +285,31 @@ h = (cmax - cmin) / 100 # determine the step by which c should be iterated
 
 models <- list()
 modelColumns <- list()
-id <- 1
 for (p in 1:pmax) {
   for (d in 1:p) {
-    c_estim <- cmin
-    sigma <- 1000.
+    pdModels <- list()
     for (c in seq(cmin, cmax, h)) {
       tmp <- EstimSETAR(xt, p, d, c) # try to run the function
       # then test whether it returns`NA` as a result
       if (!as.logical(sum(is.na(tmp))) ) {
-        sig <- tmp$resSigmaSq
-        if (sig < sigma) {
-          sigma <- sig
-          c_estim <- c
-        }
+        pdModels[[length(pdModels) + 1]] <- tmp
       }
     }
+    sigmas <- as.numeric(lapply(pdModels, function(m) m$resSigmaSq))
+    orders <- order(sigmas)
+    min_sigma_model <- pdModels[[ orders[1] ]]
     # only the model whose parameter c gives the lowest residual square sum is chosen
-    if (sigma < 100.) {
-      models[[id]] <- EstimSETAR(xt, p, d, c_estim)
-      models[[id]]$AIC <- AIC_SETAR(c(p, p), c(models[[id]]$n1, models[[id]]$n2), c(resultModel$resSigmaSq1, resultModel$resSigmaSq2))
-      models[[id]]$BIC <- BIC_SETAR(c(p, p), c(models[[id]]$n1, models[[id]]$n2), c(resultModel$resSigmaSq1, resultModel$resSigmaSq2))
-      modelColumns[[id]] <- c(
-        models[[id]]$p, models[[id]]$d, models[[id]]$c,
-        models[[id]]$n1, models[[id]]$n2, models[[id]]$AIC, models[[id]]$BIC,
-        models[[id]]$resSigmaSq)
-      id <- (id + 1)
-    }
+    min_sigma_model$AIC <- AIC_SETAR(c(p, p), c(min_sigma_model$n1, min_sigma_model$n2), c(min_sigma_model$resSigmaSq1, min_sigma_model$resSigmaSq2))
+    min_sigma_model$BIC <- BIC_SETAR(c(p, p), c(min_sigma_model$n1, min_sigma_model$n2), c(min_sigma_model$resSigmaSq1, min_sigma_model$resSigmaSq2))
+    models[[length(models) + 1]] <- min_sigma_model
+    modelColumns[[length(modelColumns) + 1]] <- c(
+      p, d, min_sigma_model$c,
+      min_sigma_model$n1, min_sigma_model$n2,
+      min_sigma_model$AIC, min_sigma_model$BIC,
+      min_sigma_model$resSigmaSq)
   }
 }
-modelColumns <- data.frame(matrix(unlist(modelColumns), nrow=(id - 1), byrow=T))
+modelColumns <- data.frame(matrix(unlist(modelColumns), nrow=length(modelColumns), byrow=T))
 names(modelColumns) <- c(
   "p", "d", "c",
   "n1", "n2", "AIC", "BIC",
