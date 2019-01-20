@@ -244,21 +244,14 @@ EstimSETAR <- function(x, p, d, c) {
   A = crossprod(t(X), t(X));  b = crossprod(t(X), y)
 
   if (abs(det(A)) > 0.000001) {
-    resultModel$PhiParams <- solve(A, b) # solving (X'X)*phi = X'y
-    resultModel$PhiStErrors <- sqrt(diag(inv(A)) / n)  # standard errors
-    skel <- crossprod(X, resultModel$PhiParams)
+    inv <- inv(A)
+    solution <- cbind(as.numeric(t(inv %*% b)),  se =  sqrt(diag(inv)/n))
+
+    resultModel$PhiParams <- solution[,1] # solving (X'X)*phi = X'y
+    resultModel$PhiStErrors <- solution[,2]  # standard errors
+    skel <- crossprod(X, resultModel$PhiParams); resultModel$skel <- skel;
     resultModel$residuals <- (y - skel)
     resultModel$resSigmaSq <- 1 / (n - k) * sum(resultModel$residuals ^ 2)
-    
-    resultModel$n1 <- sum(apply(as.matrix(x), MARGIN = 1, function(xt) (1 - Indicator(xt, c))))
-    resultModel$n2 <- sum(apply(as.matrix(x), MARGIN = 1, function(xt) Indicator(xt, c)))
-    
-    resultModel$resSigmaSq1 <- sum(
-      apply(as.matrix(seq_along(y)), MARGIN = 1,
-      function(t) ifelse((1 - Indicator(y[t], c)), (y[t] - skel[t])^2, 0))) / (resultModel$n1 - k)
-    resultModel$resSigmaSq2 <- sum(
-      apply(as.matrix(seq_along(y)), MARGIN = 1,
-            function(t) ifelse(Indicator(y[t], c),(y[t] - skel[t])^2, 0))) / (resultModel$n2 - k)
     
     return(resultModel)
   } else {
@@ -266,20 +259,43 @@ EstimSETAR <- function(x, p, d, c) {
   }
 }
 
+#' After performing this procedure for multiple parameters, i.e.: searching the discrete parameter space, we 
+#' further process the model with minimum residual square sum. For that we'll use:
+
+EstimSETAR_postproc <- function(model) {
+  x <- model$data; k <- max(model$p, model$d); c <- model$c; n <- model$n;
+  y <- as.matrix(x[(k + 1):n])
+  skel <- model$skel; model$skel <- NULL; #skel attribute no longer needed
+
+  model$n1 <- sum(apply(as.matrix(x), MARGIN = 1, function(xt) (1 - Indicator(xt, c))))
+  model$n2 <- sum(apply(as.matrix(x), MARGIN = 1, function(xt) Indicator(xt, c)))
+  
+  model$resSigmaSq1 <- sum(
+    apply(as.matrix(seq_along(y)), MARGIN = 1,
+          function(t) ifelse((1 - Indicator(y[t], c)), (y[t] - skel[t])^2, 0))) / (model$n1 - k)
+  model$resSigmaSq2 <- sum(
+    apply(as.matrix(seq_along(y)), MARGIN = 1,
+          function(t) ifelse(Indicator(y[t], c),(y[t] - skel[t])^2, 0))) / (model$n2 - k)
+  
+  model$AIC <- AIC_SETAR(c(p, p), c(model$n1, model$n2), c(model$resSigmaSq1, model$resSigmaSq2))
+  model$BIC <- BIC_SETAR(c(p, p), c(model$n1, model$n2), c(model$resSigmaSq1, model$resSigmaSq2))
+  
+  return(model)
+}
+
 #' and now we test the function for suitable parameters:
 
-str(EstimSETAR(xt, 2, 1, c=0))
-
+model <- EstimSETAR(xt, 2, 1, c=0)
+str( model <- EstimSETAR_postproc(model) )
 
 #' It should be noted that for some values of `p` and `d` the indices of arrays in the algorithms might 
-#' get out of range. For that reason we implement exceptions for the outputs of `EstimSETAR` in the following
-#' algorithm.
+#' get out of the range of regularity for the linear system. For that reason we implement exceptions for
+#' the outputs of `EstimSETAR` in the following algorithm.
 #' 
 #' ### 2.3: SETAR Parameter Estimation Procedure  ###
 #' 
 #' To answer the question: 'how does one find the right parameters `p`, `d` and `c` for their desired SETAR model?',
 #' we implement the following procedure:
-#' 
 #' 
 
 pmax <- 7 # set maximum order p
@@ -301,10 +317,8 @@ for (p in 1:pmax) {
     }
     sigmas <- as.numeric(lapply(pdModels, function(m) m$resSigmaSq))
     orders <- order(sigmas)
-    min_sigma_model <- pdModels[[ orders[1] ]]
-    # only the model whose parameter c gives the lowest residual square sum is chosen
-    min_sigma_model$AIC <- AIC_SETAR(c(p, p), c(min_sigma_model$n1, min_sigma_model$n2), c(min_sigma_model$resSigmaSq1, min_sigma_model$resSigmaSq2))
-    min_sigma_model$BIC <- BIC_SETAR(c(p, p), c(min_sigma_model$n1, min_sigma_model$n2), c(min_sigma_model$resSigmaSq1, min_sigma_model$resSigmaSq2))
+    # only the model whose parameter c gives the lowest residual square sum is chosen for postprocessing
+    min_sigma_model <- EstimSETAR_postproc(pdModels[[ orders[1] ]])
     models[[length(models) + 1]] <- min_sigma_model
     modelColumns[[length(modelColumns) + 1]] <- c(
       p, d, min_sigma_model$c,
@@ -487,6 +501,7 @@ par(mfrow=c(1,1))
 ( result1 <- selectSETAR(xt, m=mmax, thDelay=0:(mmax-1), criterion="BIC", same.lags=T, trim=0.1)  )
 #' the estimated thDelay corresponds to d-1. 
 tmp <- EstimSETAR(xt, 2, 1, -0.1)
+tmp <- EstimSETAR_postproc(tmp)
 str(tmp)
 
 #' Note that we set `thDelay=0:(mmax-1)` instead of `1:mmax`. `selectSETAR` uses `thDelay = 0` for step `d=1` delay
@@ -498,7 +513,7 @@ par(mfrow=c(1,1))
 ( result2 <- selectSETAR(xt, m=mmax, thDelay=0:(mmax-1), criterion="BIC", same.lags=T, trim=0.1) )
 
 #' Setting higher `mmax`, the function returns a list of models similar to the one given by our procedure in section 2.3.
-#' We can also compare the accuracy of the computation of the regression coefficients in our `estimSETAR` method, with
+#' We can also compare the accuracy of the computation of the regression coefficients in our `EstimSETAR` method, with
 #' for example: `setar()` function (from `tsDyn` library as well):
 
 setars <- list()
@@ -539,7 +554,20 @@ resSigmaComparison
 #' ### 2.6: Conclusion ###
 #'
 #'  The results of the SETAR Parameter Estimation Procedure in section 2.3 show that the 3 best 2-regime SETAR
-#'  models are `SETAR(1,1,0.005)`, `SETAR(2,2,0.1077)`, and `SETAR(2,1,0.4)`. The first model with the lowest 
+#'  models are:
+
+```{r top3conc, echo=F}
+results <- list()
+for (i in 1:3) {
+  p <- models[[ orders[i] ]]$p
+  d <- models[[ orders[i] ]]$d
+  c <- models[[ orders[i] ]]$c
+  results[[i]] <- paste("SETAR(", p,",", d,",", c,")" )
+}
+data.frame(unlist(results))
+
+
+#'  The first model with the lowest 
 #'  `BIC` (Bayesian Information Criterion) has the most accurate estimation of its 4 regression parameters, 
 #'  with the highest residual square sum. The first model seems to have a stable equilibrium at their threshold values.
 #'  
@@ -631,6 +659,7 @@ LMtest <- function(x, p, d, alpha = 0.05) {
 LMtest(xt, models[[ orders[1] ]]$p, models[[ orders[1] ]]$d)
 
 #' We can easily automate the testing procedure in the following loop:
+
 alpha = 0.05
 results <- list()
 nonlinear <- list()
@@ -703,6 +732,18 @@ bootstrapSigmaSq2 <- function(x, y_star, p, d, c) {
   }
 }
 
+signif_code <- function(p_val) {
+  return (
+    ifelse(p_val < 0.1 && p_val >= 0.05, ".",
+           ifelse(p_val < 0.05 && p_val >= 0.01, "*",
+                  ifelse(p_val < 0.01, "**", 
+                         ifelse(p_val < 0.001, "***", "")
+                  )
+           )
+    )
+  )
+}
+
 n <- length(xt)
 n_draws <- 1000 # of bootstrap draws per threshold c
 model_p_values <- list();
@@ -724,10 +765,7 @@ for (i in 1:12) {
     }
   }
   p_val <- draw_count / n_draws
-  model_p_values[[i]] <- c(paste("(",p,",",d,",",round(c, digits=4),")"), p_val, 
-                           ifelse(p_val < 0.1 && p_val >= 0.05, ".",
-                                  ifelse(p_val < 0.05 && p_val >= 0.01, "*",
-                                         ifelse(p_val < 0.01, "**", ""))))
+  model_p_values[[i]] <- c(paste("(",p,",",d,",",round(c, digits=4),")"), p_val, signif_code(p_val))
 }
 
 bootstrap_results <- data.frame(matrix(unlist(model_p_values), nrow=12, ncol=3, byrow=T))
