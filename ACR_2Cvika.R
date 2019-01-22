@@ -379,7 +379,7 @@ for (i in 1:3) {
 }
 
 #' The results suggest that the best SETAR models have a threshold `c` quite close to zero and more-or-less the same
-#' RSS. The very first `SETAR(1,1, 0.005)`, having a significanly lower `BIC` (Bayesian Information Criterion), has slightly
+#' RSS. The very first with a lower `BIC` (Bayesian Information Criterion), has slightly
 #' larger RSS than the models that come after it. To verify the correctness of our procedure we will need to compare it
 #' with inbuilt functions from a verified library.
 #' 
@@ -700,7 +700,6 @@ results
 #' 
 
 ```{r bootstrap1, fig.width=8, fig.height=4}
-
 bootstrapSigmaSq1 <- function(x, y_star) {
   tilde_model <- lm(y_star ~ x, data=data.frame(x))
   return (sum((tilde_model$residuals - x)^2) / length(x))
@@ -708,27 +707,21 @@ bootstrapSigmaSq1 <- function(x, y_star) {
 
 bootstrapSigmaSq2 <- function(x, y_star, p, d, c) {
   n <- length(x); k <- max(p, d);
-  Yc <- matrix(0., ncol = (2 * p + 2), nrow = (2 * p + 2)) # covariance matrix
-  Y <- matrix(0., ncol = (2 * p + 2), nrow = n) # matrix of basis vectors
-  Xc <- matrix(0., nrow = (2 * p + 2)) # rhs vector
-  i <- 1 
-  for (t in (k + 1):n) {
-    XT <- Xt(x, t, p, d, c); Y[i,] <- XT;
-    Yc <- Yc + (XT %o% XT) # accumulating elements of the cov matrix
-    Xc <- Xc + XT * y_star[t] # using random draws as rhs
-    i <- (i + 1)
-  }
-  det <- det(Yc)
-  if (det > -0.00001 && det < 0.00001) {
-    return(NA) # return NA if Yc is (almost) singular
-  } else {
-    params <- inv(Yc) %*% Xc
-    z <- array()
-    for (t in 1:(n - k)) {
-      z[t] <- crossprod(Y[t,], params)
-    }
-   residuals <- (y_star[1:(n - k)] - z)
+  
+  X <- as.matrix(apply(as.matrix((k + 1):n), MARGIN=1, function(t) Xt(x, t, p, d, c) ))
+  y <- as.matrix(y_star[(k + 1):n])
+  
+  A = crossprod(t(X), t(X));  b = crossprod(t(X), y)
+  
+  
+  if (abs(det(A)) > 0.000001) {
+    inv <- inv(A)
+    params <- as.numeric(t(inv %*% b))
+    skel <- crossprod(X, params)
+    residuals <- (y - skel)
     return(sum(residuals ^ 2)/ (n - k) )
+  } else {
+    return(NA)
   }
 }
 
@@ -736,7 +729,7 @@ signif_code <- function(p_val) {
   return (
     ifelse(p_val < 0.1 && p_val >= 0.05, ".",
            ifelse(p_val < 0.05 && p_val >= 0.01, "*",
-                  ifelse(p_val < 0.01, "**", 
+                  ifelse(p_val < 0.01 && p_val >= 0.001, "**", 
                          ifelse(p_val < 0.001, "***", "")
                   )
            )
