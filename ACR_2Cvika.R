@@ -700,6 +700,8 @@ results
 #' 
 
 ```{r bootstrap1, fig.width=8, fig.height=4}
+library(matlib)
+
 bootstrapSigmaSq1 <- function(x, y_star) {
   tilde_model <- lm(y_star ~ x, data=data.frame(x))
   return (sum((tilde_model$residuals - x)^2) / length(x))
@@ -736,12 +738,17 @@ signif_code <- function(p_val) {
   )
 }
 
+cmin <- as.numeric(quantile(xt, 0.075)); cmax <- as.numeric(quantile(xt, 0.925));
+h = (cmax - cmin) / 100
 n <- length(xt)
-n_draws <- 500 # of bootstrap draws per threshold c
+n_draws <- 1000 # of bootstrap draws per threshold c
 model_p_values <- list();
 
+#' The following method processes a chunk of generated data from N(0,1)
+
 process_chunk <- function(chunk) {
-  n <- length(xt); n_chunk <- floor(length(chunk) / n);
+  suppressMessages(library(matlib))
+  n <- length(xt); n_chunk <- length(chunk) / n;
   y_stars <- split(chunk, cut(seq_len(n_chunk), n_chunk, labels = FALSE))
   count <- 0
   for (i in 1:n_chunk) {
@@ -756,42 +763,34 @@ process_chunk <- function(chunk) {
   return(count)
 }
 
+#' This procedure will be parallelized and applied to a large ( `n`x`n_draws`) array of values. The test results for
+#' `Fstat` (from the LR test) and `FstatDraw` (bootstrapped), namely: `FstatDraw > Fstat` will be counted to approximate
+#' the asymptotic null distribution of `Fstat`.
+
 library(parallel)
 
 for (i in 1:12) {
-  i <- 1;
   p <- models[[ orders[i] ]]$p
   d <- models[[ orders[i] ]]$d
   c <- models[[ orders[i] ]]$c
   sigmaSq <- models[[ orders[i] ]]$resSigmaSq
   Fstat <- LRtest(xt, p, sigmaSq)[1]
-  draw_count <- 0
+
   Ystars <- rnorm(n * n_draws)
   
   ncl = detectCores() - 1 # detecting CPU cores available for parallel processing
-  chunks <- split(Ystars, cut(seq_len(ncl), ncl, labels = FALSE)) # split the generated matrix
-  
-  chunks[[1]]
-  
+
+  chunks <- split(Ystars, cut(seq_len(n_draws), ncl, labels = FALSE)) # split the generated matrix
+
   cl = makeCluster(ncl)
   clusterExport(cl, 
-      c("bootstrapSigmaSq1", "bootstrapSigmaSq2",
+      c("bootstrapSigmaSq1", "bootstrapSigmaSq2", "p", "d", "c",
         "xt", "Xt", "Yt", "Indicator", "Fstat"), envir=environment())
   
-  draw_count <- sum(parLapply(cl, chunks, process_chunk))
-  
+  result <- parLapply(cl, chunks, process_chunk) # parallel counting of "successful" draws
   stopCluster(cl)
   
-  
-  for (j in 1:n_draws) {
-    y_star <- rnorm(n)
-    sigmaSqTilde <- bootstrapSigmaSq1(xt, y_star)
-    sigmaSqHat <- bootstrapSigmaSq2(xt, y_star, p, d, c)
-    FstatDraw <- (n * (sigmaSqTilde - sigmaSqHat) / sigmaSqHat)
-    if (FstatDraw > Fstat) {
-      draw_count <- draw_count + 1
-    }
-  }
+  draw_count <- sum(as.numeric(result))
 
   p_val <- draw_count / n_draws
   model_p_values[[i]] <- c(paste("(",p,",",d,",",round(c, digits=4),")"), p_val, signif_code(p_val))
