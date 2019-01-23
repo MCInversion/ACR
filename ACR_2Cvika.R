@@ -275,7 +275,7 @@ EstimSETAR_postproc <- function(model) {
           function(t) ifelse((1 - Indicator(y[t], c)), (y[t] - skel[t])^2, 0))) / (model$n1 - k)
   model$resSigmaSq2 <- sum(
     apply(as.matrix(seq_along(y)), MARGIN = 1,
-          function(t) ifelse(Indicator(y[t], c),(y[t] - skel[t])^2, 0))) / (model$n2 - k)
+          function(t) ifelse(Indicator(y[t], c), (y[t] - skel[t])^2, 0))) / (model$n2 - k)
   
   model$AIC <- AIC_SETAR(c(p, p), c(model$n1, model$n2), c(model$resSigmaSq1, model$resSigmaSq2))
   model$BIC <- BIC_SETAR(c(p, p), c(model$n1, model$n2), c(model$resSigmaSq1, model$resSigmaSq2))
@@ -285,7 +285,7 @@ EstimSETAR_postproc <- function(model) {
 
 #' and now we test the function for suitable parameters:
 
-model <- EstimSETAR(xt, 2, 1, c=0)
+model <- EstimSETAR(xt, 2, 2, c=0)
 str( model <- EstimSETAR_postproc(model) )
 
 #' It should be noted that for some values of `p` and `d` the indices of arrays in the algorithms might 
@@ -713,10 +713,9 @@ bootstrapSigmaSq2 <- function(x, y_star, p, d, c) {
   
   A = crossprod(t(X), t(X));  b = crossprod(t(X), y)
   
-  
-  if (abs(det(A)) > 0.000001) {
+  if (abs(det(A)) > 0.0001) {
     inv <- inv(A)
-    params <- as.numeric(t(inv %*% b))
+    params <- inv %*% b
     skel <- crossprod(X, params)
     residuals <- (y - skel)
     return(sum(residuals ^ 2)/ (n - k) )
@@ -738,7 +737,7 @@ signif_code <- function(p_val) {
 }
 
 n <- length(xt)
-n_draws <- 1000 # of bootstrap draws per threshold c
+n_draws <- 5000 # of bootstrap draws per threshold c
 model_p_values <- list();
 
 for (i in 1:12) {
