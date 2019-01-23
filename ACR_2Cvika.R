@@ -738,8 +738,6 @@ signif_code <- function(p_val) {
   )
 }
 
-cmin <- as.numeric(quantile(xt, 0.075)); cmax <- as.numeric(quantile(xt, 0.925));
-h = (cmax - cmin) / 100
 n <- length(xt)
 n_draws <- 1000 # of bootstrap draws per threshold c
 model_p_values <- list();
@@ -773,6 +771,7 @@ for (i in 1:12) {
   p <- models[[ orders[i] ]]$p
   d <- models[[ orders[i] ]]$d
   c <- models[[ orders[i] ]]$c
+  
   sigmaSq <- models[[ orders[i] ]]$resSigmaSq
   Fstat <- LRtest(xt, p, sigmaSq)[1]
 
