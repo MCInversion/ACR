@@ -732,21 +732,57 @@ signif_code <- function(p_val) {
                          ifelse(p_val < 0.001, "***", "")
                   )
            )
-    )
+      )
   )
 }
 
 n <- length(xt)
-n_draws <- 5000 # of bootstrap draws per threshold c
+n_draws <- 500 # of bootstrap draws per threshold c
 model_p_values <- list();
 
+process_chunk <- function(chunk) {
+  n <- length(xt); n_chunk <- floor(length(chunk) / n);
+  y_stars <- split(chunk, cut(seq_len(n_chunk), n_chunk, labels = FALSE))
+  count <- 0
+  for (i in 1:n_chunk) {
+    y_star <- y_stars[[i]]
+    sigmaSqTilde <- bootstrapSigmaSq1(xt, y_star)
+    sigmaSqHat <- bootstrapSigmaSq2(xt, y_star, p, d, c)
+    FstatDraw <- (n * (sigmaSqTilde - sigmaSqHat) / sigmaSqHat)
+    if (FstatDraw > Fstat) {
+      count <- count + 1
+    }    
+  }
+  return(count)
+}
+
+library(parallel)
+
 for (i in 1:12) {
+  i <- 1;
   p <- models[[ orders[i] ]]$p
   d <- models[[ orders[i] ]]$d
   c <- models[[ orders[i] ]]$c
   sigmaSq <- models[[ orders[i] ]]$resSigmaSq
   Fstat <- LRtest(xt, p, sigmaSq)[1]
   draw_count <- 0
+  Ystars <- rnorm(n * n_draws)
+  
+  ncl = detectCores() - 1 # detecting CPU cores available for parallel processing
+  chunks <- split(Ystars, cut(seq_len(ncl), ncl, labels = FALSE)) # split the generated matrix
+  
+  chunks[[1]]
+  
+  cl = makeCluster(ncl)
+  clusterExport(cl, 
+      c("bootstrapSigmaSq1", "bootstrapSigmaSq2",
+        "xt", "Xt", "Yt", "Indicator", "Fstat"), envir=environment())
+  
+  draw_count <- sum(parLapply(cl, chunks, process_chunk))
+  
+  stopCluster(cl)
+  
+  
   for (j in 1:n_draws) {
     y_star <- rnorm(n)
     sigmaSqTilde <- bootstrapSigmaSq1(xt, y_star)
@@ -756,6 +792,7 @@ for (i in 1:12) {
       draw_count <- draw_count + 1
     }
   }
+
   p_val <- draw_count / n_draws
   model_p_values[[i]] <- c(paste("(",p,",",d,",",round(c, digits=4),")"), p_val, signif_code(p_val))
 }
