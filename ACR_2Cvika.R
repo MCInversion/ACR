@@ -687,6 +687,22 @@ results[,4] <- as.logical(results[,4])
 
 results
 
+#' For significance level `alpha = 0.05` the linearity hypothesis is not rejected only for the following
+#' models:
+
+```{r topNullHyp, echo=F}
+nullHyp <- subset(results, results[,7] < 0.05)
+res <- list()
+for (i in 1:3) {
+  p <- nullHyp$p[i]
+  d <- nullHyp$d[i]
+  c <- nullHyp$c[i]
+  res[[i]] <- paste("SETAR(", p,",", d,",", c,")" )
+}
+data.frame(unlist(res))
+
+#' The remaining models can be considered non-linear.
+#'
 #' ### 3.3 Modified LR Test Via Boostrapping ###
 #' 
 #' The proposed LR test has a significant drawback in the fact that it can only be done when Hansen's 
@@ -720,6 +736,17 @@ bootstrapSigmaSq2 <- function(x, y_star, p, d, c) {
     params <- inv %*% b
     skel <- crossprod(X, params)
     residuals <- (y - skel)
+    
+    # homoskedasticity test, possibly a wrong formula for the Wald statistic W (non-conforming arguments)
+    #e <- models[[ orders[i] ]]$residuals
+    #bpagan_test <- lmtest::bptest(lm(e ~ seq_along(e)))
+    
+    #if (bpagan_test$p.value > 0.05) {
+    #  Id <- diag(2*p + 2);  R <- as.matrix(cbind(Id, -1 * Id))
+    #  V <- sum(t(X) %*% X %*% (residuals ^ 2))
+    #  W <- t(crossprod(R, params)) %*% inv(t(R) %*% (inv * V * inv) %*% R) %*% crossprod(R, params)
+    #}
+    
     return(sum(residuals ^ 2)/ (n - k) )
   } else {
     return(NA)
