@@ -710,121 +710,71 @@ data.frame(unlist(res))
 #' F-statistic. According to Hansen (1996), however, the distribution of a bootstrapped statistic F* converges
 #' weakly in probability to the distribution of F, so that repeated bootstrap draws from F* can be used to
 #' approximate the asymptotic distribution of F.
-#' 
-#' To obtain F* we will make regressions of the time series `xt` and the multi-regime matrix `Xt`,
-#' where `y_star` will be the vector of dependent variables - a series of random values generated from N(0,1).
-#' 
 
-```{r bootstrap1, fig.width=8, fig.height=4}
-library(matlib)
-
-bootstrapSigmaSq1 <- function(x, y_star) {
-  tilde_model <- lm(y_star ~ x, data=data.frame(x))
-  return (sum((tilde_model$residuals - x)^2) / length(x))
-}
-
-bootstrapSigmaSq2 <- function(x, y_star, p, d, c) {
-  n <- length(x); k <- max(p, d);
+LRtest_Hansen <- function(model, alpha=0.05, nboot=100) {
+  x <- model$data; p <- model$p; d <- model$d; var <- model$resSigmaSq
+  linear <- ar(x, aic=F, order.max=pmax, method = "ols")
+  linearVar <- linear$var.pred  # linear model residual variance
+  Fstat <- length(x)*(linearVar-var)/linearVar  # test statistic
   
-  X <- as.matrix(apply(as.matrix((k + 1):n), MARGIN=1, function(t) Xt(x, t, p, d, c) ))
-  y <- as.matrix(y_star[(k + 1):n])
-  
-  A = crossprod(t(X), t(X));  b = crossprod(t(X), y)
-  
-  if (abs(det(A)) > 0.0001) {
-    inv <- inv(A)
-    params <- inv %*% b
-    skel <- crossprod(X, params)
-    residuals <- (y - skel)
-    
-    # homoskedasticity test, possibly a wrong formula for the Wald statistic W (non-conforming arguments)
-    #e <- models[[ orders[i] ]]$residuals
-    #bpagan_test <- lmtest::bptest(lm(e ~ seq_along(e)))
-    
-    #if (bpagan_test$p.value > 0.05) {
-    #  Id <- diag(2*p + 2);  R <- as.matrix(cbind(Id, -1 * Id))
-    #  V <- sum(t(X) %*% X %*% (residuals ^ 2))
-    #  W <- t(crossprod(R, params)) %*% inv(t(R) %*% (inv * V * inv) %*% R) %*% crossprod(R, params)
-    #}
-    
-    return(sum(residuals ^ 2)/ (n - k) )
-  } else {
-    return(NA)
-  }
-}
-
-signif_code <- function(p_val) {
-  return (
-    ifelse(p_val < 0.1 && p_val >= 0.05, ".",
-           ifelse(p_val < 0.05 && p_val >= 0.01, "*",
-                  ifelse(p_val < 0.01 && p_val >= 0.001, "**", 
-                         ifelse(p_val < 0.001, "***", "")
-                  )
-           )
+  signif_code <- function(p_val) {
+    return (
+      ifelse(p_val < 0.1 && p_val >= 0.05, ".",
+             ifelse(p_val < 0.05 && p_val >= 0.01, "*",
+                    ifelse(p_val < 0.01 && p_val >= 0.001, "**", 
+                           ifelse(p_val < 0.001, "***", "")
+                    )
+             )
       )
-  )
-}
-
-n <- length(xt)
-n_draws <- 1000 # of bootstrap draws per threshold c
-model_p_values <- list();
-
-#' The following method processes a chunk of generated data from N(0,1)
-
-process_chunk <- function(chunk) {
-  suppressMessages(library(matlib))
-  n <- length(xt); n_chunk <- length(chunk) / n;
-  y_stars <- split(chunk, cut(seq_len(n_chunk), n_chunk, labels = FALSE))
-  count <- 0
-  for (i in 1:n_chunk) {
-    y_star <- y_stars[[i]]
-    sigmaSqTilde <- bootstrapSigmaSq1(xt, y_star)
-    sigmaSqHat <- bootstrapSigmaSq2(xt, y_star, p, d, c)
-    FstatDraw <- (n * (sigmaSqTilde - sigmaSqHat) / sigmaSqHat)
-    if (FstatDraw > Fstat) {
-      count <- count + 1
-    }    
+    )
   }
-  return(count)
+  
+  if (FALSE %in% Hansen(p, d, model$PhiParams)) {
+    suppressMessages(library(tsDyn))
+    log <- capture.output({
+      testResults <- suppressWarnings(setarTest(x, m=p, thDelay=0:(d-1), nboot=nboot ,trim=0.05, test="1vs", hpc="foreach"))
+    })
+
+    p_val <- testResults$PvalBoot[1]
+    boot_Fstat <- testResults$Ftests[1]
+    critVal <- ifelse(alpha == 0.1, testResults$CriticalValBoot[1, 1],
+                      ifelse(alpha == 0.05, testResults$CriticalValBoot[1, 2],
+                             ifelse(alpha == 0.025, testResults$CriticalValBoot[1, 3],
+                                    ifelse(alpha == 0.01, testResults$CriticalValBoot[1, 4], NA)
+                                    )
+                             )
+                      )
+    c(
+      TS=round(boot_Fstat, digits=4),
+      CV=round(critVal, digits=4),
+      p_value=round(p_val, digits=4),
+      signif=signif_code(p_val)
+      )
+  } else {
+    CDF <- Vectorize( function(t) {  # test statistic CDF
+      fun <- function(t) 1 + sqrt(t/(2*pi))*exp(-t/8) + 1.5*exp(t)*pnorm(-1.5*sqrt(t)) - (t+5)*pnorm(-sqrt(t)/2)/2
+      if(abs(t)>300 || is.infinite(t)) return(sign(t))
+      if(t >=0 ) fun(t) else 1-fun(-t)
+    })
+    if(alpha==0.05) critval <- 7.68727553 # for alpha=2.5%: CV=11.03329250
+    else critval <- uniroot(function(x) CDF(x) - (1-alpha), c(-1000,1000))$root
+    p_val = 1 - CDF(Fstat)
+    c(
+      TS=round(Fstat, digits=4),
+      CV=round(critval, digits=4),
+      p_value=round(p_val, digits=4),
+      signif=signif_code(p_val)
+      )
+  }
 }
 
-#' This procedure will be parallelized and applied to a large ( `n`x`n_draws`) array of values. The test results for
-#' `Fstat` (from the LR test) and `FstatDraw` (bootstrapped), namely: `FstatDraw > Fstat` will be counted to approximate
-#' the asymptotic null distribution of `Fstat`.
-
-library(parallel)
-
+df <- list()
 for (i in 1:12) {
-  p <- models[[ orders[i] ]]$p
-  d <- models[[ orders[i] ]]$d
-  c <- models[[ orders[i] ]]$c
-  
-  sigmaSq <- models[[ orders[i] ]]$resSigmaSq
-  Fstat <- LRtest(xt, p, sigmaSq)[1]
-
-  Ystars <- rnorm(n * n_draws)
-  
-  ncl = detectCores() - 1 # detecting CPU cores available for parallel processing
-
-  chunks <- split(Ystars, cut(seq_len(n_draws), ncl, labels = FALSE)) # split the generated matrix
-
-  cl = makeCluster(ncl)
-  clusterExport(cl, 
-      c("bootstrapSigmaSq1", "bootstrapSigmaSq2", "p", "d", "c",
-        "xt", "Xt", "Yt", "Indicator", "Fstat"), envir=environment())
-  
-  result <- parLapply(cl, chunks, process_chunk) # parallel counting of "successful" draws
-  stopCluster(cl)
-  
-  draw_count <- sum(as.numeric(result))
-
-  p_val <- draw_count / n_draws
-  model_p_values[[i]] <- c(paste("(",p,",",d,",",round(c, digits=4),")"), p_val, signif_code(p_val))
+  df[[i]] <- LRtest_Hansen(models[[ orders[i] ]], nboot=100)
 }
-
-bootstrap_results <- data.frame(matrix(unlist(model_p_values), nrow=12, ncol=3, byrow=T))
-colnames(bootstrap_results) <- c("model","P-value","")
-bootstrap_results
+df <- data.frame(matrix(unlist(df), nrow=12, byrow=T))
+names(df) <- c("TV", "CV", "p-value", "")
+df
 
 #' ### 3.4 Visualisation of Non-Linear Models ###
 #' 
