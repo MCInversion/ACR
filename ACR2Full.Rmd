@@ -742,7 +742,7 @@ results <- list()
 for (i in 1:3) {
   p <- models[[ orders[i] ]]$p
   d <- models[[ orders[i] ]]$d
-  c <- models[[ orders[i] ]]$c
+  c <- round(models[[ orders[i] ]]$c, digits=4)
   results[[i]] <- paste("SETAR(", p,",", d,",", c,")" )
 }
 data.frame(unlist(results))
@@ -1169,6 +1169,7 @@ for (i in 1:nonLinCount) { # length(nonLinOrders)
   }
 }
 
+nonlinear <- sapply(1:length(nlinOrders), function(i) nonlinear[[ nlinOrders[i] ]])
 cat("==== Remaining nonlinearities detected for: ======\n")
 
 nlinNames
@@ -1233,29 +1234,29 @@ After we find a suitable SETAR3 model, we implement a postprocessing method:
 ```{r estimSETAR3Postproc, echo=T}
 
 EstimSETAR3_postproc <- function(model) {
-    x <- model$data; k <- max(model$p, model$d); c <- model$c; n <- model$n;
+    x <- model$data; k <- max(model$p, model$d); p <- model$p; c <- model$c; n <- model$n;
     y <- as.matrix(x[(k + 1):n])
     skel <- model$skel; # model$skel <- NULL; #skel attribute no longer needed
     
     # regime counts
     nRegCounts <- rowSums( matrix(as.numeric((sapply(x, function(xi) Indicator3(xi, c)))), nrow=3) )
     model$nRegCounts <- nRegCounts
-    names(model$nRegCounts) <- c("n1", "n2", "n3")
+    # names(model$nRegCounts) <- c("n1", "n2", "n3")
     
     # regime sigma sq:
     regSigmaSq <- rowSums( 
       matrix(
-        as.numeric((sapply(x, function(xi) Indicator3(xi, c)))), nrow=3)
-       %o% (y - skel)^2 ) / (nRegCounts - k)
+        as.numeric((sapply(y, function(xi) Indicator3(xi, c)))), nrow=3)
+       %*% (y - skel)^2 ) / (nRegCounts - k)
     model$regSigmaSq <- regSigmaSq
-    names(model$regSigmaSq) <- c("rss1", "rss2", "rss3")
+    # names(model$regSigmaSq) <- c("rss1", "rss2", "rss3")
     
     # count valid p orders
     pOrders <- rowSums(matrix(as.numeric((
       sapply(0:(3 * (p + 1) - 1), function(i) ifelse( (i %% 3 != 0 && model$PhiParams[i + 1] != 0), 1, 0) )
     )), nrow=3, byrow=T))
     model$pOrders <- pOrders
-    names(model$pOrders) <- c("p1", "p2", "p3")
+    # names(model$pOrders) <- c("p1", "p2", "p3")
     
     model$AIC <- AIC_SETAR(pOrders, model$nRegCounts, model$resSigmaSq)
     model$BIC <- BIC_SETAR(pOrders, model$nRegCounts, model$resSigmaSq)
@@ -1283,13 +1284,21 @@ Xt_m <- function(x, t, p, d, c, m, z = x) {
   sapply(1:m, function(j) I[j] * Y)
 }
 
+# test for packages
+suppressMessages(pkgTest("zeallot"))
+suppressMessages(pkgTest("matlib"))
+
+
 EstimSETAR_m <- function(x, p, d, c, m) {
+    m = as.integer(m)
+    if (m <= 0) {
+      message("Error: regime count m has to be a positive integer")
+      return(NA)
+    }
     if (length(c) != m - 1) {
       message("Error: Incompatible dimensions of threshold vector and regime count.");
+      return(NA)
     }
-    # test for packages
-    suppressMessages(pkgTest("zeallot"))
-    suppressMessages(pkgTest("matlib"))
     
     resultModel <- list()
     resultModel$nReg <- m
@@ -1332,30 +1341,30 @@ EstimSETAR_m <- function(x, p, d, c, m) {
 }
 
 EstimSETAR_m_postproc <- function(model) {
-    m <- model$nReg
-    x <- model$data; k <- max(model$p, model$d); c <- model$c; n <- model$n;
+    m <- model$nReg; x <- model$data; n <- model$n;
+    k <- max(model$p, model$d); p <- model$p; c <- model$c; 
     y <- as.matrix(x[(k + 1):n])
     skel <- model$skel; # model$skel <- NULL; #skel attribute no longer needed
     
     # regime counts
     nRegCounts <- rowSums( matrix(as.numeric( sapply(x, function(xi) Indicator_m(xi, c, m)) ), nrow=m) )
     model$nRegCounts <- nRegCounts
-    names(model$nRegCounts) <- sapply(1:m, function(j) paste0("n", j))
+    # names(model$nRegCounts) <- sapply(1:m, function(j) paste0("n", j))
     
     # regime sigma sq:
     regSigmaSq <- rowSums( 
-      matrix(
-        as.numeric( sapply(x, function(xi) Indicator_m(xi, c, m)) ), nrow=m)
-       %o% (y - skel)^2 ) / (nRegCounts - k)
+      matrix(as.numeric( 
+        sapply(y, function(xi) Indicator_m(xi, c, m)) ), nrow=m) %*% (y - skel)^2 ) / (nRegCounts - k)
     model$regSigmaSq <- regSigmaSq
-    names(model$regSigmaSq) <- sapply(1:m, function(j) paste0("rss", j))
+    # names(model$regSigmaSq) <- sapply(1:m, function(j) paste0("rss", j))
     
     # count valid p orders
     pOrders <- rowSums(matrix(as.numeric((
-      sapply(0:(m * (p + 1) - 1), function(i) ifelse( (i %% m != 0 && model$PhiParams[i + 1] != 0), 1, 0) )
+      sapply(0:(m * (p + 1) - 1), 
+             function(i) ifelse( (i %% m != 0 && model$PhiParams[i + 1] != 0), 1, 0) )
     )), nrow=m, byrow=T))
     model$pOrders <- pOrders
-    names(model$pOrders) <- sapply(1:m, function(j) paste0("p", j))
+    # names(model$pOrders) <- sapply(1:m, function(j) paste0("p", j))
     
     model$AIC <- AIC_SETAR(pOrders, model$nRegCounts, model$resSigmaSq)
     model$BIC <- BIC_SETAR(pOrders, model$nRegCounts, model$resSigmaSq)
@@ -1363,10 +1372,153 @@ EstimSETAR_m_postproc <- function(model) {
     return(model)
 }
 
-str( EstimSETAR_m_postproc( EstimSETAR_m(xt, p=2, d=1, c=c(-0.1, 0.2), m=3) ) )
+str( EstimSETAR_m_postproc( EstimSETAR_m(xt, p=2, d=1, c=-0.1, m=2) ) ) # 2 regimes
 
-str( EstimSETAR_m_postproc( EstimSETAR_m(xt, p=2, d=1, c=c(-0.1, 0.1, 0.2), m=4) ) )
+str( EstimSETAR_m_postproc( EstimSETAR_m(xt, p=2, d=1, c=c(-0.1, 0.2), m=3) ) ) # 3 regimes
 
+str( EstimSETAR_m_postproc( EstimSETAR_m(xt, p=2, d=1, c=c(-0.1, 0.1, 0.2), m=4) ) ) # 4 regimes
+
+
+```
+
+### 4.4 SETAR Estimation procedure
+
+Now that we prepared all necessary functions we may proceed to search for 3-regime SETAR's in a suitable search space. This time
+we will construct our outer loop through delays $d$ which will be reduced to only the delays that are contained within the models
+with detected remaining nonlinearity:
+
+```{r}
+cat(" unique delays: ")
+( delays <- unique(sapply(1:length(nonlinear), function(i) nonlinear[[i]]$d)) )
+```
+
+Still, even after this alleviation, the search might be computationally demanding. To obtain our results within reasonable time
+we use `foreach` and `doParallel` packages to compute search through $c_1$ and $c_2$ thresholds, and then process the results:
+
+```{r setar3Estim, echo=T}
+m <- 3 # 3-regime setars
+pmax <- 7 # set maximum order p
+# limit the c parameter by the 7.5-th and 92.5 percentile
+cmin <- as.numeric(quantile(xt, 0.075)); cmax <- as.numeric(quantile(xt, 0.925));
+h = (cmax - cmin) / 50 # determine the step by which c should be iterated
+
+models3 <- list()
+model3Columns <- list()
+
+suppressMessages(pkgTest("foreach"))
+suppressMessages(pkgTest("doParallel"))
+
+pkgs <- c("zeallot", "matlib")
+
+n_cores <- (detectCores() - 1)
+
+for (d in delays) {
+  for (p in d:pmax) {
+    # PARALLEL LOOP
+
+    cl <- makeCluster(n_cores)
+    registerDoParallel(cl)
+    pdModels <- foreach(c1 = seq(from = cmin, to = cmax - h, by = h), .packages = pkgs) %:%
+      foreach(c2 = seq(c1 + h, cmax, by = h), .packages = pkgs) %dopar% {
+        # skip models with slim regime
+        if(sum(xt > c1 & xt < c2) < length(xt) * 0.15) {
+          NA
+        } else {
+          tmp <- EstimSETAR_m(xt, p, d, c(c1, c2), m) # try to run the function
+          # then test whether it returns`NA` as a result
+          if (!as.logical(sum(is.na(tmp))) ) {
+            list(tmp)
+          }          
+        }
+      }
+
+    stopCluster(cl)
+    
+    # OLD LOOP:
+    
+    #pdModels <- list()
+    #for(c1 in seq(from = cmin, to = cmax - h, by = h)) {
+    #  for(c2 in seq(c1 + h, cmax, by = h)) {
+    #    if(sum(xt > c1 & xt < c2) < length(xt) * 0.15) next # skip models with slim regime
+    #    tmp <- EstimSETAR_m(xt, p, d, c(c1, c2), m) # try to run the function
+    #    # then test whether it returns`NA` as a result
+    #    if (!as.logical(sum(is.na(tmp))) ) {
+    #      pdModels[[length(pdModels) + 1]] <- tmp
+    #    }
+    #  }
+    #}
+
+    # frankly, this is a mess, but I can only get this nested list from the parallel loop
+    pdOmitted <- lapply(unlist(pdModels, recursive=F), 
+                        function(m) if(!is.logical(m) && !is.null(m)) m else list(list(resSigmaSq = Inf)))
+    sigmas <- as.numeric(lapply(pdOmitted, function(m) m[[1]]$resSigmaSq))
+    orders <- order(sigmas)
+    # only the model whose parameter c gives the lowest residual square sum is chosen for postprocessing
+    min_sigma_model <- EstimSETAR_m_postproc(pdOmitted[[ orders[1] ]][[1]])
+    
+    models3[[length(models3) + 1]] <- min_sigma_model
+    model3Columns[[length(model3Columns) + 1]] <- c(
+      min_sigma_model$pOrders, d, round(min_sigma_model$c, digits=4),
+      min_sigma_model$nRegCounts,
+      min_sigma_model$AIC, min_sigma_model$BIC,
+      min_sigma_model$resSigmaSq)
+  }
+}
+
+```
+
+```{r}
+model3Columns <- data.frame(matrix(unlist(model3Columns), nrow=length(model3Columns), byrow=T))
+names(model3Columns) <- c(
+  sapply(1:m, function(j) paste0("p", j)), "d", sapply(1:(m-1), function(j) paste0("c", j)),
+  sapply(1:m, function(j) paste0("n", j)), "AIC", "BIC",
+  "resSigmaSq"
+)
+BICs3 <- sapply(models3, function(m) m$BIC)
+
+orders3 <- order(BICs3)
+models3Out <- model3Columns[orders3,]
+head(models3Out, n=12)
+```
+
+These are the SETAR3 models that can replace the SETAR2's with remaining nonlinearity, ordered by $BIC$ with estimated coefficients:
+
+```{r}
+model3CoeffErrors <- list()
+for(o in orders3) {
+  p <- models3[[o]]$p
+  d <- models3[[o]]$d
+  c1 <- models3[[o]]$c[1]; c2 <- models3[[o]]$c[2];
+  key <- paste(p, d, round(c1, digits=4), round(c2, digits=4), sep="/")
+  model3CoeffErrors[[key]] <- rbind(t(models3[[o]]$PhiParams),
+                                   t(models3[[o]]$PhiStErrors))
+  row.names(model3CoeffErrors[[key]]) <- t(c("Phi", "stdError"))
+}
+model3CoeffErrors
+```
+
+### 4.5 SETAR3 Visualisation
+
+```{r SETAR3Top3Plot, fig.width=9, fig.height=4}
+plotNmax <- 100
+par(mfrow=c(1,2))
+for (i in 1:min(8, length(orders3))) {
+  model <- models3[[orders3[i]]]
+  SetarFit <- xt - append(matrix(0., ncol=model$p), model$residuals)
+  c1 <- model$c[1]; c2 <- model$c[2];
+  name <- paste0("SETAR(",model$p,",",model$d,",",round(c1, digits=3),",",round(c2, digits=3),")");
+
+  plot(x=dat$time[1:plotNmax], y=xt[1:plotNmax],
+       main=name, xlab="year", ylab="%")
+  lines(x=dat$time[1:plotNmax], y=SetarFit[1:plotNmax], col="blue",lwd=2)
+  lines(x=c(dat$time[1], dat$time[plotNmax]), y=c(c1,c1), col="brown3", lty="dashed", lwd=2)
+  lines(x=c(dat$time[1], dat$time[plotNmax]), y=c(c2,c2), col="green3", lty="dashed", lwd=2)
+  legend("topleft", legend=c("fitted SETAR3", "c1", "c2"), col=c("blue", "brown3", "green3"), lty=c(1,2,2), lwd=2, cex=0.8)
+  
+  plot(x=dat$time[1:plotNmax], y=model$residuals[1:plotNmax], type="l", 
+       main=paste0(name," Residuals"),
+       xlab="year", ylab="%")
+}
 ```
 
 
