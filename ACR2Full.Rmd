@@ -200,7 +200,7 @@ fluctuate or drop more wildly compared to the regime of "job stability" when the
 
 ### 2.1: Implementation of Useful Functions
 
-First we define a, so called, "indicator function" which essentially returns a boolean value from a given input process
+First, we define a, so called, "indicator function" which essentially returns a boolean value from a given input process
   value `x` and threshold value `c`:
 
 ```{r, echo=T}
@@ -228,7 +228,11 @@ We can test the function on a given subset of the unemployment time series. Due 
 examined time series is rather 'smooth', for further use, we will examine its differences:
 
 ```{r, echo=T}
-xt <- diff(as.numeric(dat$unemp))
+xt <- diff(as.numeric(dat$unemp)) # take differences in data
+x_train <- xt[seq_along(unempseries$test)] # extract test part
+nt <- length(x_train)
+x_eval <- xt[nt + seq_along(unempseries$eval)] # extract eval part
+xt <- x_train # set the source data to test part values
 ```
 
 ```{r}
@@ -790,7 +794,7 @@ for (i in 1:12) {
   p <- models[[ orders[i] ]]$p
   d <- models[[ orders[i] ]]$d
   c <- models[[ orders[i] ]]$c
-  keys[i] <- paste(p, d, round(c, digits=4), sep=" / ")
+  keys[i] <- paste(p, d, round(c, digits=3), sep=" / ")
   hansenResults[i,] <- Hansen(d, c, models[[ orders[i] ]]$PhiParams)
 }
 row.names(hansenResults) <- keys
@@ -857,13 +861,14 @@ LMtest <- function(x, p, d, alpha = 0.05) {
 LMtest(xt, models[[ orders[1] ]]$p, models[[ orders[1] ]]$d)
 ```
 
-We can easily automate the testing procedure in the following loop:
+We can easily automate the testing procedure with the following results:
 
-```{r, echo=T}
+```{r}
 alpha = 0.05
 results <- list()
 nonlinear <- list()
 nonLinCount <- 0
+nonLinOrders <- c()
 for (i in 1:12) {
   p <- models[[ orders[i] ]]$p; d <- models[[ orders[i] ]]$d; c <- models[[ orders[i] ]]$c;
   hansenResult <- Hansen(d, c, models[[ orders[i] ]]$PhiParams)
@@ -877,6 +882,7 @@ for (i in 1:12) {
   if (testResult[3] < alpha) {
     nonLinCount <- nonLinCount + 1
     nonlinear[[nonLinCount]] <- models[[ orders[i] ]]
+    nonLinOrders <- c(nonLinOrders, orders[i])
   }
   results[[i]] <- append(cbind(p, d, c, hansenResult), testResult)
 }
@@ -1134,10 +1140,6 @@ CovMat3 <- function(x, p, d, c) {
 }
 
 CovMat3(xt, p=2, d=1, c=c(-0.1, 0.2))
-
-# skeleton of a model with regression coeffs: theta
-SkeletonSETAR3 <- function(x, t, p, d, c, theta, z = x) c(theta %*% CovMat3(x, p, d, c)[t,]) 
-SkeletonSETAR3(xt, t=3, p=2, d=1, c=c(-0.1, 0.2), rep(1, 3*3))
 ```
 
 
@@ -1154,6 +1156,7 @@ iid process, the correlation integral should approach $C(q,r) \rightarrow C(1, r
 
 nlinOrders <- c() # buffer to store indices for models with possible nonlinearities
 nlinNames <- c()
+oldNlinOrders <- c()
 for (i in 1:nonLinCount) { # length(nonLinOrders)
   test <- tseries::bds.test(na.omit(nonlinear[[i]]$residuals), m = 3)
   p <- nonlinear[[i]]$p
@@ -1163,6 +1166,7 @@ for (i in 1:nonLinCount) { # length(nonLinOrders)
     name <- paste("SETAR(", p, ",", d, "," , c, ")")
     cat("possible remaining nonlinearity for",name ," with mean p-val = ", mean(c(test$p.value) > alpha), "\n")
     nlinOrders <- c(nlinOrders, i)
+    oldNlinOrders <- c(oldNlinOrders, nonLinOrders[i])
     nlinNames <- c(nlinNames, name)
   } else {
     cat("remaining nonlinearity rejected SETAR(", p, ",", d, ",", c, ") with mean p-val = ", mean(c(test$p.value) > alpha), "\n")
@@ -1170,6 +1174,7 @@ for (i in 1:nonLinCount) { # length(nonLinOrders)
 }
 
 nonlinear <- sapply(1:length(nlinOrders), function(i) nonlinear[[ nlinOrders[i] ]])
+nonLinOrders <- oldNlinOrders
 cat("==== Remaining nonlinearities detected for: ======\n")
 
 nlinNames
@@ -1252,9 +1257,13 @@ EstimSETAR3_postproc <- function(model) {
     # names(model$regSigmaSq) <- c("rss1", "rss2", "rss3")
     
     # count valid p orders
-    pOrders <- rowSums(matrix(as.numeric((
-      sapply(0:(3 * (p + 1) - 1), function(i) ifelse( (i %% 3 != 0 && model$PhiParams[i + 1] != 0), 1, 0) )
-    )), nrow=3, byrow=T))
+    pOrders <- rowSums(
+      matrix(as.numeric((
+        sapply(1:(3 * (p + 1)), 
+               function(i) ifelse( (i %% (p + 1) != 1 && model$PhiParams[i] != 0), 1, 0) )
+        )
+      ), nrow=3, byrow=T)
+    )
     model$pOrders <- pOrders
     # names(model$pOrders) <- c("p1", "p2", "p3")
     
@@ -1344,40 +1353,51 @@ EstimSETAR_m_postproc <- function(model) {
     m <- model$nReg; x <- model$data; n <- model$n;
     k <- max(model$p, model$d); p <- model$p; c <- model$c; 
     y <- as.matrix(x[(k + 1):n])
-    skel <- model$skel; # model$skel <- NULL; #skel attribute no longer needed
+    skel <- model$skel;
     
     # regime counts
     nRegCounts <- rowSums( matrix(as.numeric( sapply(x, function(xi) Indicator_m(xi, c, m)) ), nrow=m) )
     model$nRegCounts <- nRegCounts
-    # names(model$nRegCounts) <- sapply(1:m, function(j) paste0("n", j))
+    
+    # count valid p orders
+    pOrders <- rowSums(
+      matrix(as.numeric((
+        sapply(1:(m * (p + 1)), 
+               function(i) ifelse( (i %% (p + 1) != 1 && model$PhiParams[i] != 0), 1, 0) )
+        )
+      ), nrow=m, byrow=T)
+    )
+    model$pOrders <- pOrders
+    
+    k_m <- pmax(pOrders, model$d) # k-offset for different regimes
     
     # regime sigma sq:
     regSigmaSq <- rowSums( 
       matrix(as.numeric( 
-        sapply(y, function(xi) Indicator_m(xi, c, m)) ), nrow=m) %*% (y - skel)^2 ) / (nRegCounts - k)
+        sapply(y, function(xi) Indicator_m(xi, c, m)) ), nrow=m) %*% (y - skel)^2 ) / (nRegCounts - k_m)
     model$regSigmaSq <- regSigmaSq
     # names(model$regSigmaSq) <- sapply(1:m, function(j) paste0("rss", j))
     
-    # count valid p orders
-    pOrders <- rowSums(matrix(as.numeric((
-      sapply(0:(m * (p + 1) - 1), 
-             function(i) ifelse( (i %% m != 0 && model$PhiParams[i + 1] != 0), 1, 0) )
-    )), nrow=m, byrow=T))
-    model$pOrders <- pOrders
-    # names(model$pOrders) <- sapply(1:m, function(j) paste0("p", j))
-    
     model$AIC <- AIC_SETAR(pOrders, model$nRegCounts, model$resSigmaSq)
     model$BIC <- BIC_SETAR(pOrders, model$nRegCounts, model$resSigmaSq)
+    
+    c <- round(c, digits=3) # 3 dec. places seems enough
+    model$name <- paste0("SETAR(", p, ",", d, ",", paste(na.omit(c), collapse=','), ")")
   
     return(model)
 }
+
+getModelName <- function(model) {
+  p <- model$p; d <- model$d; c <- round(model$c, digits=3) # 3 dec. places seems enough
+  paste0("SETAR(", p, ",", d, ",", paste(na.omit(c), collapse=','), ")")
+}
+
 
 str( EstimSETAR_m_postproc( EstimSETAR_m(xt, p=2, d=1, c=-0.1, m=2) ) ) # 2 regimes
 
 str( EstimSETAR_m_postproc( EstimSETAR_m(xt, p=2, d=1, c=c(-0.1, 0.2), m=3) ) ) # 3 regimes
 
 str( EstimSETAR_m_postproc( EstimSETAR_m(xt, p=2, d=1, c=c(-0.1, 0.1, 0.2), m=4) ) ) # 4 regimes
-
 
 ```
 
@@ -1452,13 +1472,13 @@ for (d in delays) {
     pdOmitted <- lapply(unlist(pdModels, recursive=F), 
                         function(m) if(!is.logical(m) && !is.null(m)) m else list(list(resSigmaSq = Inf)))
     sigmas <- as.numeric(lapply(pdOmitted, function(m) m[[1]]$resSigmaSq))
-    orders <- order(sigmas)
+    s_orders <- order(sigmas)
     # only the model whose parameter c gives the lowest residual square sum is chosen for postprocessing
-    min_sigma_model <- EstimSETAR_m_postproc(pdOmitted[[ orders[1] ]][[1]])
+    min_sigma_model <- EstimSETAR_m_postproc(pdOmitted[[ s_orders[1] ]][[1]])
     
     models3[[length(models3) + 1]] <- min_sigma_model
     model3Columns[[length(model3Columns) + 1]] <- c(
-      min_sigma_model$pOrders, d, round(min_sigma_model$c, digits=4),
+      min_sigma_model$p, min_sigma_model$pOrders, d, round(min_sigma_model$c, digits=4),
       min_sigma_model$nRegCounts,
       min_sigma_model$AIC, min_sigma_model$BIC,
       min_sigma_model$resSigmaSq)
@@ -1470,7 +1490,7 @@ for (d in delays) {
 ```{r}
 model3Columns <- data.frame(matrix(unlist(model3Columns), nrow=length(model3Columns), byrow=T))
 names(model3Columns) <- c(
-  sapply(1:m, function(j) paste0("p", j)), "d", sapply(1:(m-1), function(j) paste0("c", j)),
+  "p", sapply(1:m, function(j) paste0("p", j)), "d", sapply(1:(m-1), function(j) paste0("c", j)),
   sapply(1:m, function(j) paste0("n", j)), "AIC", "BIC",
   "resSigmaSq"
 )
@@ -1497,16 +1517,18 @@ for(o in orders3) {
 model3CoeffErrors
 ```
 
+As we might notice, some models differ only in their information criteria and coefficients, since they were estimated from a different maximum order $p$.
+
 ### 4.5 SETAR3 Visualisation
 
-```{r SETAR3Top3Plot, fig.width=9, fig.height=4}
+```{r SETAR3Top3Plot, fig.width=10, fig.height=4}
 plotNmax <- 100
 par(mfrow=c(1,2))
 for (i in 1:min(8, length(orders3))) {
   model <- models3[[orders3[i]]]
   SetarFit <- xt - append(matrix(0., ncol=model$p), model$residuals)
   c1 <- model$c[1]; c2 <- model$c[2];
-  name <- paste0("SETAR(",model$p,",",model$d,",",round(c1, digits=3),",",round(c2, digits=3),")");
+  name <- model$name
 
   plot(x=dat$time[1:plotNmax], y=xt[1:plotNmax],
        main=name, xlab="year", ylab="%")
@@ -1521,9 +1543,218 @@ for (i in 1:min(8, length(orders3))) {
 }
 ```
 
+### 4.6 Conclusion
 
+Due to our limited sampling space of `delays` we obtained `r length(orders3)` possible $SETAR3(p, d, c_1, c_2)$ models, and since remaining
+SETAR3 nonlinearity was detected in `r length(nonlinear)` of the original SETAR2 models, we replace them by the top `r length(nonlinear)`
+newly found SETAR3's:
+
+```{r}
+# set regime count of old models to 2
+for (i in 1:length(models)) {
+  models[[ orders[i] ]]$nReg <- 2;
+  models[[ orders[i] ]]$name <- getModelName(models[[ orders[i] ]])
+}
+# replace nonlinear
+for (i in 1:length(nonlinear)) {
+  models[[ nonLinOrders[i] ]] <- models3[[ orders3[i] ]]
+}
+BICs_revised <- sapply(models, function(m) m$BIC)
+orders <- order(BICs_revised)
+
+model_cols <- list()
+for (i in 1:12) {
+  p <- models[[ orders[i] ]]$p; d <- models[[ orders[i] ]]$d;
+  c <- round(ifelse(models[[ orders[i] ]]$c > 1, models[[ orders[i] ]]$c, c(models[[ orders[i] ]]$c, NA)), digits=3)
+  model_cols[[i]] <- c(model=models[[ orders[i] ]]$name, BIC=models[[ orders[i] ]]$BIC)
+}
+
+model_cols <- unlist(model_cols)
+model_cols <- data.frame(matrix(unlist(model_cols), nrow=12, byrow=T))
+names(model_cols) <- c("model", "BIC")
+model_cols
+```
 
 ## 5. Predictions via SETAR Models and Their Evaluation
+
+### 5.1 Helper functions
+
+Since we have not yet defined a skeleton function, i.e. one that would continue plugging in the time series values even after the end of
+testing data. For that purpose we implement a step-forward function for an $m$-regime SETAR:
+
+```{r setarOneStep, echo=T}
+SETAR_m_singleStep <- function(model, x, t) {
+  m <- model$nReg; n <- model$n;
+  p <- model$p; d <- model$d; c <- model$c; 
+  # parameter matrix with regime coefficients by row
+  Phi <- matrix(model$PhiParams, nrow=m)
+  
+  # extract regime vector
+  X <- Xt_m(x, t, p, d, c, m)
+  reg_id <- which(colSums(X!=0)!=0)
+  x_reg <- X[,reg_id]
+  Phi[reg_id,] %*% x_reg
+}
+```
+
+We can test it on a particular SETAR model:
+
+```{r setarStepTest, echo=T}
+n_ahead <- 1
+model <- models[[ orders[3] ]]
+x_out <- c(xt, rep(0, n_ahead)); nt <- length(xt)
+  
+for (i in 1:n_ahead) {
+  x_out[nt + i] <- SETAR_m_singleStep(model, x_out, nt + i)
+}
+```
+```{r}
+cat("x_out: "); x_out[nt:(nt + n_ahead)]
+cat("data: "); c(xt, x_eval)[nt:(nt + n_ahead)]
+```
+
+This is a single-step prediction of the data using the first model. When we set `n_ahead > 1`, the step function builds up
+upon previous predicted values and the skeleton converges to a model's particular equilibrium:
+
+```{r}
+n_ahead <- length(x_eval) - 1
+model <- models[[ orders[3] ]]
+x_out <- c(xt, rep(0, n_ahead)); nt <- length(xt)
+  
+for (i in 1:n_ahead) {
+  x_out[nt + i] <- SETAR_m_singleStep(model, x_out, nt + i)
+}
+data.frame(cbind(x_out=x_out[nt:(nt + n_ahead)], data=c(xt, x_eval)[nt:(nt + n_ahead)]))
+cat("\n equilibria: "); model$equilibria
+```
+
+If the model is explosive, the predictions will diverge:
+
+```{r setarNaive, fig.width=10, fig.height=4}
+par(mfrow=c(1,2))
+n_ahead <- 18;
+nt <- length(xt)
+history <- as.integer(0.075 * nt)
+for (i in 1:12) {
+  model <- models[[ orders[i] ]]
+  x_out <- c(xt, rep(0, n_ahead)); 
+  
+  for (i in 1:n_ahead) {
+    x_out[nt + i] <- SETAR_m_singleStep(model, x_out, nt + i)
+  }
+  plt_range <- 1.3 * c(min(c(x_out, xt, x_eval), na.rm=T), max(c(x_out, xt, x_eval), na.rm=T))
+  time_range <- (nt-history):(nt + n_ahead)
+  
+  c <- model$c
+  if (length(c) > 1) {
+    plot(x=dat$time[time_range],y=c(xt, x_eval)[time_range], type="b", lwd=2,
+       ylim=plt_range, main=paste(model$name,"naive cumulative pred"), xlab="t", ylab="x[%]")
+    lines(x=dat$time[time_range], y=x_out[time_range], col="blue2", lwd=2)
+    lines(x=c(dat$time[(nt-history)], dat$time[(nt + n_ahead)]), y=c(c[1],c[1]), col="brown3", lty="dashed", lwd=2)
+    lines(x=c(dat$time[(nt-history)], dat$time[(nt + n_ahead)]), y=c(c[2],c[2]), col="green3", lty="dashed", lwd=2)
+    legend("topleft", legend=c("data", paste0(n_ahead,"-step"), "c1", "c2"), col=c("black", "blue", "brown3", "green3"), 
+           lty=c(NA, 1, 2, 2), pch=c(1, NA, NA, NA), lwd=2, cex=0.8)
+  } else {
+    plot(x=dat$time[time_range],y=c(xt, x_eval)[time_range], type="b", lwd=2,
+       ylim=plt_range, main=paste(model$name,"naive cumulative pred"), xlab="t", ylab="x[%]")
+    lines(x=dat$time[time_range], y=x_out[time_range], col="blue2", lwd=2)
+    lines(x=c(dat$time[(nt-history)], dat$time[(nt + n_ahead)]), y=c(c,c), col="green3", lty="dashed", lwd=2)
+    legend("topleft", legend=c("data", paste0(n_ahead,"-step"), "c"), col=c("black", "blue", "green3"), 
+           lty=c(NA, 1, 2), pch=c(1, NA, NA), lwd=2, cex=0.8)
+  }
+}
+
+```
+
+The examples above tested `r n_ahead` steps of a naiive approach to prediction, by assuming the process evolves via its skeleton. 
+More convenient approaches are `Monte Carlo` (`"MC"`) and `Bootstrap`. Both rely on adding noise to series predictions. Monte Carlo approach
+simulates normally distributed noise $\epsilon \sim N(0, \hat{\sigma}_{\varepsilon})$ from residual standard error $\hat{\sigma}_{\varepsilon}$, and
+Bootstrap, on the other hand, does not assume the normality of model residuals and instead randomly samples the residuals themselves.
+
+We will use these two approaches in the following implementation:
+
+```{r setarPredict, echo=T}
+PredictSETAR <- function(
+  model, x_train, x_eval, h=1, n_ahead=length(x_eval)-h, 
+  type=c("naive", "MC", "bootstrap"), Nboot=100, alpha=0.2, single.step=T) {
+
+  type <- match.arg(type)
+  
+  p <- model$p;  d <- model$d; # model dims
+
+  if(missing(x_train)) {
+    x_train = model$data # training sample
+  }
+  
+  # result series
+  x_res <- x_train
+  # training sample size
+  nt <- length(x_res)
+  sd_res <- sqrt(model$resSigmaSq)
+
+  # extract model residuals
+  resid <- as.numeric(model$residuals)
+  resid <- resid[!is.na(resid)]
+  
+  # fill the prediction part of the array with zeros
+  x_res <- c(x_res, rep(0, n_ahead))
+  xrange <- (p - 1) + h - ((p - 1):0)
+  
+  if(type=="naive") Nboot <- 1
+  
+  appendPredictions <- function(x_res){ 
+    noise <- switch(
+      type, 
+        "naive"= rep(0, n_ahead), 
+        "MC"= rnorm(n_ahead, mean = 0, sd=sd_res), 
+        "bootstrap" = sample(resid, size=n_ahead, replace=T)
+    )
+
+    for(t in (nt + (1:n_ahead))) {
+      x_res[t] <- SETAR_m_singleStep(model, x_res, t)
+      x_res[t] <- x_res[t] + noise[t - nt]
+    }
+    return(x_res)
+  }
+  
+  x_simulations <- replicate(Nboot, appendPredictions(x_res))
+  x_sim_means <- rowMeans(x_simulations, na.rm=T)
+  x_pred <- x_sim_means[nt + 1:n_ahead]
+  
+  # if not naive compute conf. intervals:
+  x_errors <- x_pred
+  if(type != "naive"){
+    x_errors <- t(apply(
+      x_simulations[nt + 1:n_ahead, ,drop=F], MARGIN=1, quantile, 
+      prob=sort(c(alpha, 1 - alpha)), na.rm=T))
+  }
+
+  if(type == "naive"){
+    result <- list(pred=x_pred)
+  } else {
+    result <- list(pred=x_pred, se=x_errors)
+  }
+  
+  return(result)
+}
+```
+
+Now we test it on our data:
+
+```{r}
+n_ahead <- 5
+cat(paste0("naive (",n_ahead,"-step):\n"))
+PredictSETAR(model, x_train, x_eval, n_ahead=n_ahead)$pred
+cat(paste0("Monte Carlo (",n_ahead,"-step):\n"))
+PredictSETAR(model, x_train, x_eval, n_ahead=n_ahead, type="MC")$pred
+cat(paste0("Bootstrap (",n_ahead,"-step):\n"))
+PredictSETAR(model, x_train, x_eval, n_ahead=n_ahead, type="bootstrap")$pred
+cat("data:\n")
+x_eval[1:n_ahead]
+
+```
+
+
 
 ## 6. Tests for Non-Linearity of STAR Models
  
