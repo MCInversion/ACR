@@ -1801,7 +1801,7 @@ To test other prediction results, such as confidence intervals and simulation pa
 ```{r}
 predictSETAR_andPlot <- function(
   model, time, x_train, x_eval, pred_type=c("naive", "MC", "bootstrap"),
-  single.step=T, plot.paths=T, print.rmse=T, alpha=0.2, legend.pos="top"
+  single.step=T, plot.paths=T, print.rmse=T, alpha=0.2, plot.leg=F, legend.pos="top"
 ) {
   ne <- length(x_eval); nt <- length(x_train)
   xt <- c(x_train, x_eval)
@@ -1830,20 +1830,22 @@ predictSETAR_andPlot <- function(
     " (", n_ahead, "-step) ", ifelse(plot.paths, "sim", ""), ifelse(print.rmse, paste(", RMSE =", round(sqrt(predict$MSE), digits=4)), ""))
   method_name_short <- paste0(pred_type, " (", n_ahead, "-step) ")
   
-  if (length(c) > 1) {
-    legend_names <- c("data", method_name_short, 
-                      ifelse(pred_type != "naive", paste0((1 - predict$alpha) * 100,"% conf.interval   "), NA), "c1", "c2", ifelse(plot.paths, "paths", NA))
-    legend_col <- c("black", "dodgerblue3", ifelse(pred_type != "naive", "dodgerblue2", NA), "brown3", "green3", ifelse(plot.paths, gray(0.6, alpha=0.2), NA))
-    legend_lty <- c(NA, 1, ifelse(pred_type != "naive", 2, NA), 2, 2, ifelse(plot.paths, 1, NA))
-    legend_pch <- c(1, NA, NA, NA, NA, NA)
-    legend_lwd <- c(2, 2, ifelse(pred_type != "naive", 2, NA), 2, 2, ifelse(plot.paths, 1, NA))
-  } else {
-    legend_names <- c("data", method_name_short, 
-                      ifelse(pred_type != "naive", paste0((1 - predict$alpha) * 100,"% conf.interval   "), NA), "c", ifelse(plot.paths, "paths", NA))
-    legend_col <- c("black", "dodgerblue3", ifelse(pred_type != "naive", "dodgerblue2", NA), "green3", ifelse(plot.paths, gray(0.6, alpha=0.2), NA))
-    legend_lty <- c(NA, 1, ifelse(pred_type != "naive", 2, NA), 2, ifelse(plot.paths, 1, NA))
-    legend_pch <- c(1, NA, NA, NA, NA)
-    legend_lwd <- c(2, 2, ifelse(pred_type != "naive", 2, NA), 2, ifelse(plot.paths, 1, NA))
+  if (plot.leg) {
+    if (length(c) > 1) {
+      legend_names <- c("data", method_name_short, 
+                        ifelse(pred_type != "naive", paste0((1 - predict$alpha) * 100,"% conf.interval   "), NA), "c1", "c2", ifelse(plot.paths, "paths", NA))
+      legend_col <- c("black", "dodgerblue3", ifelse(pred_type != "naive", "dodgerblue2", NA), "brown3", "green3", ifelse(plot.paths, gray(0.6, alpha=0.2), NA))
+      legend_lty <- c(NA, 1, ifelse(pred_type != "naive", 2, NA), 2, 2, ifelse(plot.paths, 1, NA))
+      legend_pch <- c(1, NA, NA, NA, NA, NA)
+      legend_lwd <- c(2, 2, ifelse(pred_type != "naive", 2, NA), 2, 2, ifelse(plot.paths, 1, NA))
+    } else {
+      legend_names <- c("data", method_name_short, 
+                        ifelse(pred_type != "naive", paste0((1 - predict$alpha) * 100,"% conf.interval   "), NA), "c", ifelse(plot.paths, "paths", NA))
+      legend_col <- c("black", "dodgerblue3", ifelse(pred_type != "naive", "dodgerblue2", NA), "green3", ifelse(plot.paths, gray(0.6, alpha=0.2), NA))
+      legend_lty <- c(NA, 1, ifelse(pred_type != "naive", 2, NA), 2, ifelse(plot.paths, 1, NA))
+      legend_pch <- c(1, NA, NA, NA, NA)
+      legend_lwd <- c(2, 2, ifelse(pred_type != "naive", 2, NA), 2, ifelse(plot.paths, 1, NA))
+    }    
   }
   
   plot(x=dat$time[time_range],y=xt[time_range], type="b", lwd=2,
@@ -1870,10 +1872,12 @@ predictSETAR_andPlot <- function(
   } else {
     lines(x=c(time[(nt-history)], time[(nt + ne)]), y=c(c,c), col="green3", lty="dashed", lwd=2)
   }
-  legend(legend.pos, horiz=T, legend=legend_names, 
-         col=legend_col, 
-         lty=legend_lty, 
-         pch=legend_pch, lwd=legend_lwd, cex=0.8)
+  if (plot.leg) {
+    legend(legend.pos, horiz=T, legend=legend_names, 
+           col=legend_col, 
+           lty=legend_lty, 
+           pch=legend_pch, lwd=legend_lwd, cex=0.8)    
+  }
 }
 
 ```
@@ -1882,11 +1886,11 @@ predictSETAR_andPlot <- function(
 par(mfrow=c(1, 1))
 predictSETAR_andPlot(
   models[[ orders[3] ]], time=dat$time, x_train=x_train, x_eval=x_eval, 
-  pred_type="MC", single.step=T, plot.paths=F)
+  pred_type="MC", single.step=T, plot.paths=F, plot.leg=T)
 
 predictSETAR_andPlot(
   models[[ orders[3] ]], time=dat$time, x_train=x_train, x_eval=x_eval, 
-  pred_type="MC", single.step=F, plot.paths=T)
+  pred_type="MC", single.step=F, plot.paths=T, plot.leg=T)
 ```
 
 Now we possess all necessary tools to proceed evaluating our SETAR models according to their predictive abilities.
@@ -1907,7 +1911,7 @@ for (i in 1:12) {
 #### Monte Carlo:
 
 ```{r singleStepMCPlots, fig.width=11, fig.height=3.6}
-par(mfrow=c(1, 1))
+par(mfrow=c(1, 2))
 for (i in 1:12) {
   predictSETAR_andPlot(
   models[[ orders[i] ]], time=dat$time, x_train=x_train, x_eval=x_eval, 
@@ -1918,7 +1922,7 @@ for (i in 1:12) {
 #### Bootstrap:
 
 ```{r singleStepBootPlots, fig.width=11, fig.height=3.6}
-par(mfrow=c(1, 1))
+par(mfrow=c(1, 2))
 for (i in 1:12) {
   predictSETAR_andPlot(
   models[[ orders[i] ]], time=dat$time, x_train=x_train, x_eval=x_eval, 
@@ -1931,7 +1935,7 @@ for (i in 1:12) {
 #### Monte Carlo:
 
 ```{r multiStepMCPlots, fig.width=11, fig.height=3.6}
-par(mfrow=c(1, 1))
+par(mfrow=c(1, 2))
 for (i in 1:12) {
   predictSETAR_andPlot(
   models[[ orders[i] ]], time=dat$time, x_train=x_train, x_eval=x_eval, 
@@ -1942,7 +1946,7 @@ for (i in 1:12) {
 #### Bootstrap:
 
 ```{r multiStepBootPlots, fig.width=11, fig.height=3.6}
-par(mfrow=c(1, 1))
+par(mfrow=c(1, 2))
 for (i in 1:12) {
   predictSETAR_andPlot(
   models[[ orders[i] ]], time=dat$time, x_train=x_train, x_eval=x_eval, 
