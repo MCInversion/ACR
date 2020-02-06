@@ -1826,8 +1826,8 @@ predictSETAR_andPlot <- function(
   c <- model$c
 
   method_name <- paste0(
-    switch(pred_type, "naive" = "Naive", "MC" = "Monte Carlo", "boot" = "Bootstrap"), 
-    " (", n_ahead, "-step) ", ifelse(plot.paths, "sim", ""), ifelse(print.rmse, paste(", RMSE =", round(sqrt(predict$MSE), digits=4)), ""))
+    switch(pred_type, "naive" = "Naive", "MC" = "Monte Carlo", "bootstrap" = "Bootstrap"), 
+    " (", n_ahead, "-step) ", ifelse(plot.paths, "sim", ""), ifelse(print.rmse, paste("\n RMSE =", round(sqrt(predict$MSE), digits=4)), ""))
   method_name_short <- paste0(pred_type, " (", n_ahead, "-step) ")
   
   if (plot.leg) {
@@ -1882,7 +1882,7 @@ predictSETAR_andPlot <- function(
 
 ```
 
-```{r predictPlot1, echo=T, fig.width=10, fig.height=3.6}
+```{r predictPlot1, echo=T, fig.width=10, fig.height=4}
 par(mfrow=c(1, 1))
 predictSETAR_andPlot(
   models[[ orders[3] ]], time=dat$time, x_train=x_train, x_eval=x_eval, 
@@ -1899,7 +1899,7 @@ Now we possess all necessary tools to proceed evaluating our SETAR models accord
 
 #### Naive:
 
-```{r singleStepNaivePlots, fig.width=11, fig.height=3.6}
+```{r singleStepNaivePlots, fig.width=11, fig.height=4}
 par(mfrow=c(1, 2))
 for (i in 1:12) {
   predictSETAR_andPlot(
@@ -1926,7 +1926,7 @@ par(mfrow=c(1, 2))
 for (i in 1:12) {
   predictSETAR_andPlot(
   models[[ orders[i] ]], time=dat$time, x_train=x_train, x_eval=x_eval, 
-  pred_type="boot", single.step=T, plot.paths=F)
+  pred_type="bootstrap", single.step=T, plot.paths=F)
 }
 ```
 
@@ -1950,7 +1950,7 @@ par(mfrow=c(1, 2))
 for (i in 1:12) {
   predictSETAR_andPlot(
   models[[ orders[i] ]], time=dat$time, x_train=x_train, x_eval=x_eval, 
-  pred_type="boot", single.step=F, plot.paths=T)
+  pred_type="bootstrap", single.step=F, plot.paths=T)
 }
 ```
 
@@ -1970,7 +1970,7 @@ for (i in 1:12) {
   # pass reference, only a copy
   predict1_naive <- PredictSETAR(model, x_train, x_eval, single.step=T, type="naive", return.paths=F)
   predict1_mc <- PredictSETAR(model, x_train, x_eval, single.step=T, type="MC", return.paths=F)
-  predict1_boot <- PredictSETAR(model, x_train, x_eval, single.step=T, type="boot", return.paths=F)
+  predict1_boot <- PredictSETAR(model, x_train, x_eval, single.step=T, type="bootstrap", return.paths=F)
   model$mse_naive <- predict1_naive$MSE; model$mse_mc <- predict1_mc$MSE; model$mse_boot <- predict1_boot$MSE
   
   divergent1 <- se_factor * model$resSigmaSq < predict1_naive$MSE
@@ -1987,10 +1987,10 @@ for (i in 1:12) {
 model_cols_mse
 ```
 
-We notice that models that quickly diverge have significantly higher $MSE$ than their $\hat\sigma_{\varepsilon}^2$ (`rss`). 
-One could then formulate a condition that model is "too divergent" if its training data $MSE$ (`rss`) is significantly lower 
+We notice that models that quickly diverge have significantly higher $MSE$ than their $\hat\sigma_{\varepsilon}^2$ (`RSS / (n - k)`). 
+One could then formulate a condition that model is "too divergent" if its training data $MSE$ (`RSS / (n - k)`) is significantly lower 
 than prediction $MSE$. The significance factor could be taken, for example, as `r se_factor`, i.e.: if the prediction $MSE$ exceeds `r se_factor`-multiple 
-of training data `rss`, the prediction diverges. In the above table, we mark divergent predictions with `!`.
+of training data `RSS / (n - k)`, the prediction diverges. In the above table, we mark divergent predictions with `!`.
 
 ### 5.5 Conclusion and SETAR Evaluation
 
@@ -2014,7 +2014,6 @@ mse_naive_cols[, 1:4]
 
 ```{r}
 cat("Models sorted by 1-step Monte Carlo MSE:\n")
-#non_divergent <- model_cols_mse[which( sapply(1:12, function(i) nchar(gsub(" ", "", model_cols_mse[i, 7])) == 0) ), ]
 mse_mc_orders <- order(non_divergent[, 5])
 mse_mc_cols <- non_divergent[mse_mc_orders, ]
 cbind(mse_mc_cols[, 1:3], MSE_mc=mse_mc_cols[, 5])
@@ -2022,13 +2021,504 @@ cbind(mse_mc_cols[, 1:3], MSE_mc=mse_mc_cols[, 5])
 
 ```{r}
 cat("Models sorted by 1-step Bootstrap MSE:\n")
-#non_divergent <- model_cols_mse[which( sapply(1:12, function(i) nchar(gsub(" ", "", model_cols_mse[i, 7])) == 0) ), ]
 mse_boot_orders <- order(non_divergent[, 6])
 mse_boot_cols <- non_divergent[mse_mc_orders, ]
 cbind(mse_boot_cols[, 1:3], MSE_boot=mse_boot_cols[, 6])
 ```
 
-and as we observe, the order remains the same regardless of the prediction method.
+and as we observe, the order of the first 4 models remains the same regardless of the prediction method.
 
-## 6. Tests for Non-Linearity of STAR Models
+## 6. STAR Model Estimation
+
+While SETAR-type models are governed by a discontinuous transition function (`Indicator`), we have not yet tried a continuous alternative
+of transitioning between regimes. STAR (Smooth Threshold AutoRegressive) models utilize the possibility of a smooth regime transition. As will
+the context of the following sections suggest, we can choose a particular transition function between exponential (ESTAR) and logistic (LSTAR) and
+a scalar parameter $\gamma$ which describes the "smoothness" of a regime transition. For $\gamma \rightarrow \infty$ we obtain a discontinuous step-like
+transition function, as in SETAR's indicator.
+
+### 6.1 Tests For STAR-type nonlinearity
+
+To test for STAR-type nonlinearity we use a specialized form of an LM test.
+
+```{r}
+LMtest_LINvsSTAR <- function(x, p, d, alpha=0.05, alternative=c("LSTAR","ESTAR")) {
+  x <- as.ts(x)  # if x is not a ts object
+  tmp <- c(  # list of delayed ts
+    list(x),
+    lapply(1:p, function(i) lag(x, -i))
+  )
+  tmp <- do.call(function(...) ts.intersect(..., dframe=T), tmp)
+  names(tmp) <- c("x", paste0("x",1:p))
+  y <- lm(x ~ ., data=tmp)$residuals 
+  y <- c(rep(NA, p), y)
+  attributes(y) <- attributes(x)  # make y the same ts object as x
+  tmp <- c(  
+    list(y),
+    lapply(1:p, function(i) stats::lag(x, -i)),  # lag shifts forward, therefore the minus operator
+    lapply(1:p, function(i) stats::lag(x, -i)*stats::lag(x,-d)),
+    lapply(1:p, function(i) stats::lag(x, -i)*stats::lag(x,-d)^2)
+  )
+  switch(alternative[1],
+         LSTAR = {
+           tmp <- c(tmp, lapply(1:p, function(i) stats::lag(x, -i)*stats::lag(x,-d)^3) )
+           df <- 3*p
+         },
+         ESTAR = { df <- 2*p }
+  )
+  tmp <- do.call(function(...) ts.intersect(..., dframe=T), tmp)
+  names(tmp)[1] <- "y"  # enough to label the first column (response)
+  z <- lm(y ~ ., data=tmp)$residuals
+  LM <- length(x) * (1 - sum(z^2)/sum(y^2, na.rm=T))
+  c(LM=LM, crit_val=qchisq(1-alpha, df=df), p_value=1-pchisq(LM, df=df))
+}
+```
  
+```{r starLM_example, echo=T}
+LMtest_LINvsSTAR(xt, p=3, d=1, alternative = "LSTAR")
+LMtest_LINvsSTAR(xt, p=3, d=1, alternative = "ESTAR")
+```
+
+To decide whether an exponential or a logistic transition function provides a better fit, we test for the last 
+parameter vector of a regression test from `LMtest_LINvsSTAR` is zero. By accepting the hypothesis, we conclude that
+exponential transition fits our data better:
+
+```{r expVsLogTest, echo=T}
+LMtest_EvsL <- function(x, p, d, alpha=0.05) {
+  x <- as.ts(x)  # if x is not a ts object
+  tmp <- c(  # list of delayed ts
+    list(x),
+    lapply(1:p, function(i) stats::lag(x, -i))
+  )
+  tmp <- do.call(function(...) ts.intersect(..., dframe = T), tmp)
+  names(tmp) <- c("x", paste0("x", 1:p))
+  y <- lm(x ~ ., data = tmp)$residuals
+  y <- c(rep(NA, p), y)
+  attributes(y) <- attributes(x)  # make y the same ts object as x
+  tmp <- c(
+    list(y),
+    lapply(1:p, function(i) stats::lag(x, -i)),  # lag shifts forward, therefore the minus operator
+    lapply(1:p, function(i) stats::lag(x, -i) * stats::lag(x, -d)),
+    lapply(1:p, function(i) stats::lag(x, -i) * stats::lag(x, -d)^2)
+  )
+  
+  # === ESTAR regression ========
+  tmp <- do.call(function(...) ts.intersect(..., dframe = T), tmp)
+  names(tmp)[1] <- "y"
+  res_E <- lm(y ~ ., data = tmp)$residuals
+  
+  # === LSTAR regression ========
+  tmp <- c(tmp, lapply(1:p, function(i) stats::lag(x, -i) * stats::lag(x, -d)^3) )
+  tmp <- do.call(function(...) ts.intersect(..., dframe = T), tmp)
+  names(tmp)[1] <- "y"
+  res_L <- lm(y ~ ., data = tmp)$residuals
+  
+  LM <- length(x) * (1 - sum(res_L^2) / sum(res_E^2))
+  c(LM = LM, crit_val = qchisq(1 - alpha, df = p), p_value = 1 - pchisq(LM, df = p), alpha_corrected = alpha / p)
+}
+
+LMtest_EvsL(xt, p=3, d=1)
+```
+The statistic of an LM test is assumed to be of $\chi^2(p)$ distribution. This means that the p-value
+of the test has to be compared with a significance factor normalized by the parameter vector's dimension, i.e.:
+$\text{p-val} < \alpha/p$ (Bonferoni correction). Hence the `alpha_corrected` value.
+
+Naturally, we need to test for STAR-type non-linearity for an array of discrete parameters $p$ and $d$. The delay
+parameter $d$ is, of course, bounded by the lag parameter $p$, the upper bound of which can be assumed from the partial
+autocorrelation of the series:
+
+```{r seriesPACF1, fig.width=9, fig.height=3.6}
+# par(mfrow=c(1, 2))
+acf(xt, lag.max=20, type="partial")
+pmax <- 12
+```
+
+Since partial autocorrelation dies out after 2 lag steps, we should limit the sample space by $p_{max}=2$, however to show
+a reasonably large sample, we follow an assumption that $p_{max}=12$:
+
+```{r}
+starTest <- list()
+results <- sapply(1:pmax, function(p) 
+  sapply(1:p, function(d)
+    c(p = p, d = d, LMtest_LINvsSTAR(xt, p, d, alt = "LSTAR")["p_value"], crit = alpha / (3 * p))
+  )
+)
+results <- data.frame(t(do.call(cbind, results)))
+cat("LSTAR non-linearity test results (linearity rejected):\n")
+( starTest$LSTARs <- results[results$p_value < results$crit, ] )
+
+```
+```{r}
+results <- sapply(1:pmax, function(p) 
+  sapply(1:p, function(d)
+    c(p = p, d = d, LMtest_LINvsSTAR(xt, p, d, alt = "ESTAR")["p_value"], crit = alpha / (3 * p))
+  )
+)
+results <- data.frame(t(do.call(cbind, results)))
+cat("ESTAR non-linearity test results (linearity rejected):\n")
+( starTest$ESTARs <- results[results$p_value < results$crit, ] )
+```
+
+Tests show a clear LSTAR preference, with an overlap with ESTAR nonlinearity for $p=2$. 
+
+```{r}
+( starTest <- list(LSTARs=starTest$LSTARs[, 1:2], ESTARs=starTest$ESTARs[, 1:2]) )
+```
+
+The parameter intersection between the above samples should also be examined for preference, using our
+ESTAR vs LSTAR test:
+
+```{r}
+( inters <- dplyr::intersect(starTest$LSTARs, starTest$ESTARs) %>%
+  apply(MARGIN=1, FUN=function(x) c(x, round(LMtest_EvsL(xt, p=x[1], d=x[2]), digits=4)) ) %>% t() )
+
+cat("\n ESTAR preference: \n")
+epref <- inters[which(inters[, 5] < inters[, 6]), ]
+ifelse(length(epref), epref, NA)
+```
+
+Which suggests that we ought to consider only LSTAR models.
+
+### 6.2 Estimating STAR Model Parameters
+
+First, we implement and test all necessary functions (for $m$ regimes).
+
+#### Regime Transition
+
+```{r transFunDef, echo=T}
+SmoothTransition <- function(x, c, gamma, type=c("logistic","exponential")) {
+  switch(type,
+         logistic = {1 / (1 + exp(-gamma * (x - c)))},
+         exponential = {1 - exp(-gamma * (x - c)^2)}
+  )
+}
+
+SmoothTransition(0.3, c=0.2, gamma=10, type="logistic")
+SmoothTransition(0.3, c=c(-0.1, 0.2), gamma=c(1, 5), type="logistic")
+```
+
+#### Single Regime Basis
+
+```{r basisFuncDef, echo=T}
+Yt <- function(x, t, p) c(1, x[(t-1):(t-p)])
+
+Yt(xt, t=3, p=2)
+```
+
+```{r}
+# install.packages("Rcpp")
+# install.packages("devtools")
+# install.packages("Rcpp",type='source')
+# library(Rcpp)
+# library(devtools)
+# find_rtools()
+# require(Rcpp)
+# 
+# cppFunction('double SmoothTransitionC(double x, double c, double gamma, String type) {  
+#   if (type == "logistic") {    
+#    return 1 / (1 + exp(-gamma * (x - c)));  
+#   } 
+#   else 
+#     if (type == "exponential") {
+#       return 1 - exp(-gamma * pow((x - c), 2));  
+#     } 
+#     else {    
+#       return 0;  
+#     } 
+# }')        
+
+#SmoothTransitionC(x = 1.2, c = 1.5, gamma = 10.0, type = "logistic")
+```
+
+#### $m$-Regime Basis
+
+```{r mregBasisDef, echo=T}
+Xt_m <- function(x, t, p, d, c, gamma, m=2, z = x, type=c("logistic", "exponential")) {
+  type <- match.arg(type)
+  I <- SmoothTransition(z[t - d], c, gamma, type)
+  Y <- Yt(x, t, p)
+  as.numeric(sapply(1:m, function(j) (ifelse(j == 1, 1, I[j - 1]) - ifelse(j == m, 0, I[j])) * Y))
+}
+
+Xt_m(xt, t=3, p=2, d=1, c=0.2, gamma=10)
+Xt_m(xt, t=3, p=2, d=1, c=c(-0.1, 0.2), gamma=c(1, 5), m=3)
+
+```
+
+#### Skeleton
+
+```{r mRegSTARSkel, echo=T}
+skelSTAR_m <- function(x, t, p, d, c, gamma, PhiParams, m=2, z = x, type = c("logistic", "exponential")) {
+  c(PhiParams %*% Xt_m(x, t, p, d, c, gamma, m, z, type)) 
+}
+
+skelSTAR_m(xt, t=10, p=2, d=1, c=0.2, gamma=1, PhiParams=rep(1, 6))
+skelSTAR_m(xt, t=10, p=2, d=1, c=c(-0.1, 0.2), gamma=c(1, 5), PhiParams=rep(1, 9), m=3)
+```
+
+#### Information Criteria
+
+```{r infCritDef, echo=T}
+IC <- function(n, p, sigmaSq, m=2) {
+  lik <- -n * log(2 * pi / sigmaSq) / 2 - (n - p) / 2
+  npar <- m * (p + 1) + 2 * (m - 1)
+  c(AIC= -2 * lik + 2 * npar, BIC= - 2 * lik + log(n) * npar)
+} 
+
+IC(n=length(xt), p=2, sigmaSq=0.027)
+IC(n=length(xt), p=2, sigmaSq=0.027, m=3)
+```
+
+#### Parameter Estimation
+
+```{r}
+# test for packages
+suppressMessages(pkgTest("zeallot"))
+suppressMessages(pkgTest("matlib"))
+```
+
+```{r stdErrEstim, echo=T}
+
+Phi <- model$PhiParams
+x <- xt; 
+p <- model$p
+d <- model$d
+res <- model$residuals
+gamma <- model$gamma
+type <- "logistic"
+
+# estimate standard errors of STAR parms: (Phi, gamma, c)
+gradient_CovMatrix <- function(x, p, d, res, Phi, gamma, c, z=x, m=2, type=c("logistic", "exponential")) {
+  type <- match.arg(type)
+  n <- length(x); k <- max(p, d); times <- (k + 1):n;
+  G <- sapply(times, function(t) SmoothTransition(z[t - d], c, gamma, type))
+  Phi <- matrix(Phi, nrow=m, byrow=T)
+  # transition derivatives
+  dG_dgamma <- numeric(); dG_dc <- numeric(); d2G_dgamma2 <- numeric(); 
+  d2G_dc2 <- numeric(); d2G_gammadc <- numeric();
+  
+  if (type == "exponential") {
+    dG_dgamma <- sapply(times, function(t) exp(-gamma * (c - z[t - d])^2) * (c - z[t - d])^2 )
+  } else {
+    dG_dgamma <- sapply(times, function(t) exp(gamma * (z[t - d] - c)) * (z[t - d] - c) /
+                          (1 + exp(gamma * (z[t - d] - c)))^2 )
+  }
+  if (type == "exponential") {
+    dG_dc <- sapply(times, function(t) 2 * gamma * (c - z[t - d]) * exp(-gamma * (c - z[t - d])^2) )
+  } else {
+    dG_dc <- sapply(times, function(t) -gamma * exp(gamma * (z[t - d] + c)) / 
+                      (exp(c * gamma) + exp(gamma * z[t - d]))^2 )
+  }
+  if (type == "exponential") {
+    d2G_dgamma2 <- sapply(times, function(t) -exp(-gamma * (c - z[t - d])^2) * (c - z[t - d])^4 )
+  } else {
+    d2G_dgamma2 <- sapply(times, function(t) exp(gamma * (c + z[t - d])) * (c - z[t - d])^2 * 
+              (exp(c * gamma) - exp(z[t - d] * gamma)) / (exp(c * gamma) + exp(z[t - d] * gamma))^3 )
+  }
+  if (type == "exponential") {
+    d2G_dc2 <- sapply(times, function(t) -2 * gamma * exp(-gamma * (c - z[t - d])^2) *
+              (-1 + 2 * c^2 * gamma - 4 * c * z[t - d] * gamma + 2 * z[t - d]^2 * gamma) )
+  } else {
+    d2G_dc2 <- sapply(times, function(t) gamma^2 * exp(gamma * (c + z[t - d])) *
+                        (exp(c * gamma) - exp(z[t - d] * gamma)) /
+              (exp(c * gamma) + exp(z[t - d] * gamma))^3 )
+  }
+  if (type == "exponential") {
+    d2G_dgammadc <- sapply(times, function(t) -2 * exp(-gamma * (c - z[t - d])^2) * (c - z[t - d]) *
+              (-1 + c^2 * gamma - 2 * c * z[t - d] * gamma + z[t - d]^2 * gamma) )
+  } else {
+    d2G_dgammadc <- sapply(times, function(t) -exp(gamma * (z[t - d] - c)) * 
+              (1 - c * gamma + z[t - d] * gamma + exp(gamma * (z[t - d] - c)) * (1 + c * gamma - z[t - d] * gamma)) /
+              (1 + exp(gamma * (z[t - d] - c)))^3 )
+  }
+  # skeleton gradient and Hessian
+  Y <- sapply(times, function(t) Yt(x, t, p))
+  skelGrad <- c(
+    Y %*% (1 - G), Y %*% G, 
+    as.numeric(sapply(2:m, function(j) (Phi[j,] - Phi[j - 1,]))) %*% Y %*% dG_dgamma,
+    as.numeric(sapply(2:m, function(j) (Phi[j,] - Phi[j - 1,]))) %*% Y %*% dG_dc
+  )
+  zeros <- matrix(0, nrow=m*(p + 1), ncol=m*(p + 1))
+  PhiSquareMat <- matrix(c(-Y %*% dG_dgamma, -Y %*% dG_dc), nrow=m*(p + 1), ncol=m)
+  skelHess <- c(
+    matrix(0, nrow=(p + 1), ncol=m*(p + 1), byrow=T), -Y %*% dG_dgamma, -Y %*% dG_dc,
+    
+  )
+}
+```
+
+```{r mEstimSTARDef, echo=T}
+EstimSTAR_m <- function(x, p, d, c, gamma, m=2, type=c("logistic", "exponential")) {
+  type <- match.arg(type)
+  m = as.integer(m)
+  if (m <= 0) {
+    message("Error: regime count m has to be a positive integer")
+    return(NA)
+  }
+  if (length(c) != m - 1) {
+    message("Error: Incompatible dimensions of threshold vector and regime count.");
+    return(NA)
+  }
+  
+  resultModel <- list()
+  resultModel$nReg <- m; resultModel$type <- type
+  resultModel$p = p; resultModel$d = d; 
+  resultModel$c = c; resultModel$gamma = gamma;
+  resultModel$data = x; n = length(x); resultModel$n = n;
+  
+  X <- as.matrix(apply(as.matrix((p + 1):n), MARGIN=1, function(t) Xt_m(x, t, p, d, c, gamma, m) ))
+  y <- as.matrix(x[(p + 1):n])
+  K <- crossprod(t(X), t(X)); b <- crossprod(t(X), y);
+  detK <- abs(det(K))
+  
+  if (detK < 0.000001) {
+    return(NA)
+  } else {
+    K <- inv(K)
+    sol_phi <- as.numeric(t(K %*% b)); sol_se <- sqrt(diag(K)/n);
+    eps <- 0.01;
+    # filter out those coeffs that are of the same order of magnitude as their errors
+    filter <- sapply(1:(m * (p + 1)), function (i) ifelse(
+        abs(sol_phi[i]) <= 2 * abs(sol_se[i]), 0, 1
+       )
+    )
+    sol_phi <- sol_phi * filter
+    sol_se <- sol_se * filter
+    solution <- cbind(phi = sol_phi, se = sol_se)
+    resultModel$PhiParams <- solution[,1] # solving (X'X)*phi = X'y
+    resultModel$PhiStErrors <- solution[,2] # standard errors
+    skel <- crossprod(X, resultModel$PhiParams); resultModel$skel <- skel;
+    resultModel$residuals <- (y - skel)
+    resultModel$resSigmaSq <- 1 / (n - p) * sum(resultModel$residuals^2)
+
+    return(resultModel)
+  }
+}
+
+str( EstimSTAR_m(xt, p=2, d=2, c=0, gamma=10) ) # 2 regimes
+str( EstimSTAR_m(xt, p=2, d=2, c=c(0, 0.2), gamma=c(10, 12), m=3) ) # 3 regimes
+```
+
+```{r mEstimSTARPostprocDef, echo=T}
+EstimSTAR_m_postproc <- function(model) {
+  m <- model$nReg; x <- model$data; n <- model$n;
+  p <- model$p; c <- model$c; gamma <- model$gamma;
+  type <- model$type
+
+  y <- as.matrix(x[(p + 1):n])
+  skel <- model$skel;
+
+  # count valid p orders
+  pOrders <- rowSums(
+    matrix(as.numeric((
+      sapply(1:(m * (p + 1)),
+      function(i) ifelse( (i %% (p + 1) != 1 && model$PhiParams[i] != 0), 1, 0) )
+      )), nrow=m, byrow=T)
+  )
+  model$pOrders <- pOrders
+
+  # Information criteria
+  starIC <- as.list(IC(n=n, p=p, sigmaSq=model$resSigmaSq, m=m))
+  model$AIC <- starIC$AIC
+  model$BIC <- starIC$BIC
+  c <- round(c, digits=3); gamma <- round(gamma, digits=3) # 3 dec. places seems enough
+  model$name <- paste0(ifelse(type == "logistic", "L", "E"),
+                "STAR(", p, ",", d, ",", 
+                paste(na.omit(c), collapse=','),",", 
+                paste(na.omit(gamma), collapse=','), ")")
+  return(model)
+}
+
+str( EstimSTAR_m_postproc(EstimSTAR_m(xt, p=2, d=2, c=0, gamma=10)) ) # 2 regimes
+str( EstimSTAR_m_postproc(EstimSTAR_m(xt, p=2, d=2, c=c(0, 0.2), gamma=c(10, 12), m=3)) ) # 3 regimes
+```
+
+### 6.3 2-Regime STAR Estimation Procedure
+
+Now that we've prepared all necessary methods, we proceed to implementing an estimation procedure, similar to the search for SETAR models in
+sections 2.3 and 4.4:
+
+```{r estimSTARloop, echo=T}
+# limit the c parameter by the 7.5-th and 92.5 percentile
+m <- 2
+cmin <- as.numeric(quantile(xt, 0.075)); cmax <- as.numeric(quantile(xt, 0.925));
+h = (cmax - cmin) / 50 # determine the step by which c should be iterated
+hypars <- starTest$LSTARs # hyperparameter array
+
+models_s <- list() # s as in smooth
+models_s_columns <- list()
+
+suppressMessages(pkgTest("foreach"))
+suppressMessages(pkgTest("doParallel"))
+pkgs <- c("zeallot", "matlib")
+
+n_cores <- (detectCores() - 1)
+
+for(i in 1:nrow(hypars)) {
+  p <- hypars[i, 1]; d <- hypars[i, 2];
+
+  cl <- makeCluster(n_cores)
+  registerDoParallel(cl)
+  pdModels <- foreach(gamma = seq(from = 0.5, to = 10, by = 0.5), .packages = pkgs) %:%
+      foreach(c = seq(cmin, cmax, by = h), .packages = pkgs) %dopar% {
+          tmp <- EstimSTAR_m(xt, p, d, c, gamma) # try to run the function
+          # then test whether it returns`NA` as a result
+          if (!as.logical(sum(is.na(tmp))) ) {
+              list(tmp)
+          }
+      }
+
+  stopCluster(cl)
+  
+  pdOmitted <- lapply(unlist(pdModels, recursive=F),
+      function(m) if(!is.logical(m) && !is.null(m)) m else list(list(resSigmaSq = Inf)))
+  sigmas <- as.numeric(lapply(pdOmitted, function(m) m[[1]]$resSigmaSq))
+  s_orders <- order(sigmas)
+  # only the model whose parameter c gives the lowest residual square sum is chosen for postprocessing
+  min_sigma_model <- EstimSTAR_m_postproc(pdOmitted[[ s_orders[1] ]][[1]])
+  
+  models_s[[length(models_s) + 1]] <- min_sigma_model
+  models_s_columns[[length(models_s_columns) + 1]] <- c(
+      min_sigma_model$type,
+      p, d, round(min_sigma_model$c, digits=4), 
+      round(min_sigma_model$gamma, digits=4),
+      round(min_sigma_model$AIC, digits=4),
+      round(min_sigma_model$BIC, digits=4),
+      round(min_sigma_model$resSigmaSq, digits=4))
+}
+```
+
+```{r estimSTARtable}
+models_s_columns <- data.frame(matrix(unlist(models_s_columns), nrow=length(models_s_columns), byrow=T))
+names(models_s_columns) <- c(
+  "transition", "p", "d", "c", "gamma",
+  "AIC", "BIC", "resSigmaSq"
+)
+BICs_s <- sapply(models_s, function(m) m$BIC)
+
+orders_s <- order(BICs_s)
+models_s_Out <- models_s_columns[orders_s,]
+head(models_s_Out, n=12)
+```
+
+Again, we sorted the models by their $BIC$. We seem to have a rather small sample, but that is most likely due to only having `r length(hypars)` 
+models with detected $STAR$-type nonlinearity. Estimated parameters were obtained during the postprocessing phase on a model with lowest $\hat\sigma_{\varepsilon}^2$.
+
+```{r}
+models_s_CoeffErrors <- list()
+for(o in orders_s) {
+  p <- models_s[[o]]$p
+  d <- models_s[[o]]$d
+  c <- models_s[[o]]$c
+  gamma <- models_s[[o]]$gamma
+  key <- paste(p, d, round(c, digits=4), round(gamma, digits=4), sep="/")
+  models_s_CoeffErrors[[key]] <- rbind(t(models_s[[o]]$PhiParams),
+                                       t(models_s[[o]]$PhiStErrors))
+  row.names(models_s_CoeffErrors[[key]]) <- t(c("Phi", "stdError"))
+}
+models_s_CoeffErrors
+```
+
+
+
+
+
