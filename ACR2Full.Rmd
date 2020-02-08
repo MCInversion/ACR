@@ -2222,13 +2222,7 @@ IC(n=length(xt), p=2, sigmaSq=0.027, m=3)
 
 #### Parameter Estimation
 
-<!-- $$\begin{equation*} -->
-<!-- \mathbf{}\left[\begin{matrix} -->
-<!-- 2 & -5 & 4\\ 1 & -2.5 & 1\\ 1 & -4 & 6 -->
-<!-- \end{matrix}\right]  -->
-<!-- \end{equation*} -->
-<!-- $$ -->
-
+The initial estimation of a STAR model candidate follows the same pattern as estimation methods in sections 2.2 and 4.3:
 
 ```{r}
 # test for packages
@@ -2236,10 +2230,161 @@ suppressMessages(pkgTest("zeallot"))
 suppressMessages(pkgTest("matlib"))
 ```
 
-```{r stdErrEstim, echo=T}
+```{r mEstimSTARDef, echo=T}
+EstimSTAR_m <- function(x, p, d, c, gamma, m=2, type=c("logistic", "exponential")) {
+  type <- match.arg(type)
+  m = as.integer(m)
+  if (m <= 0) {
+    message("Error: regime count m has to be a positive integer")
+    return(NA)
+  }
+  if (length(c) != m - 1) {
+    message("Error: Incompatible dimensions of threshold vector and regime count.");
+    return(NA)
+  }
+  
+  resultModel <- list()
+  cPrint <- round(c, digits=3); gammaPrint <- round(gamma, digits=3) # 3 dec. places seems enough
+  resultModel$name <- paste0(ifelse(type == "logistic", "L", "E"),
+                "STAR(", p, ",", d, ",", 
+                paste(na.omit(cPrint), collapse=','),",", 
+                paste(na.omit(gammaPrint), collapse=','), ")")
+  resultModel$nReg <- m; resultModel$type <- type
+  resultModel$p = p; resultModel$d = d; 
+  resultModel$c = c; resultModel$gamma = gamma;
+  resultModel$data = x; n = length(x); resultModel$n = n;
+  
+  X <- as.matrix(apply(as.matrix((p + 1):n), MARGIN=1, function(t) Xt_m(x, t, p, d, c, gamma, m) ))
+  y <- as.matrix(x[(p + 1):n])
+  K <- crossprod(t(X), t(X)); b <- crossprod(t(X), y);
+  detK <- abs(det(K))
+  
+  if (detK < 0.000001) {
+    return(NA)
+  } else {
+    K <- inv(K)
+    sol_phi <- as.numeric(t(K %*% b)) # solving (X'X)*phi = X'y
+    # resultModel$PhiStErrors <- solution[,2] # standard errors
+    skel <- crossprod(X, sol_phi); resultModel$skel <- skel;
+    resultModel$residuals <- (y - skel)
+    resultModel$resSigmaSq <- 1 / (n - p) * sum(resultModel$residuals^2)
+    resultModel$PhiParams <- sol_phi
 
-# estimate standard errors of STAR parms: (Phi, gamma, c)
+    return(resultModel)
+  }
+}
+
+str( EstimSTAR_m(xt, p=2, d=2, c=0, gamma=10) ) # 2 regimes
+str( EstimSTAR_m(xt, p=2, d=2, c=c(0, 0.2), gamma=c(10, 12), m=3) ) # 3 regimes
+```
+
+#### Estimating Standard Errors of STAR Parameters
+
+Notice, that we can no longer find a consitent estimate of parameter variances from the AR covariance matrix alone. 
+Individual regimes are interdependent thanks to smooth transition functions. We will need to find an estimate of a covariance matrix $\boldsymbol{\Sigma}_{\hat\theta}$ of
+all parameters $\theta = (\phi_1,\phi_2,...,\phi_m,\gamma_1,...,\gamma_{m-1},c_1,...,c_{m-1})^{\top}$ (where $m$ is the number of regimes). Under our given conditions, the least square
+estimate $\hat\theta$ of $\theta$ is asymptotically normally distributed, i.e.: $\sqrt{n}(\hat\theta - \theta) \sim N(\textbf{0}, \boldsymbol{\Sigma}_{\hat\theta})$ for $n \rightarrow \infty$. Where a consitent estimate of the covariance matrix is given by $\hat{\boldsymbol{\Sigma}}_{\hat\theta} = \frac{1}{n}\hat{\textbf{H}}_n^{-1}\hat{\textbf{M}}_n\hat{\textbf{H}}_n^{-1}$, where $\hat{\textbf{H}}_n = \frac{1}{n - p}\sum_{t=p+1}^{n}\nabla^2r_t(\hat\theta)$ is the mean Hessian, $\hat{\textbf{M}}_n = \frac{1}{n - p}\sum_{t=p+1}^{n}\nabla r_t(\hat\theta) \nabla r_t(\hat\theta)^{\top}$ the mean information matrix, and $r_t(\theta)=\big(x_t - F(x_{t-d},\theta) \big)^2$ ($F$ is the model skeleton).
+
+Given the dimensions of our model ($m$ - number of regimes, $p$ - AR parameter lag), we obtain symmetrical square matrices of dimension $\dim{\theta} \times \dim{\theta}$, where $\dim{\theta} = m (p + 1)+2(m-1)$. Both $\big( r_t(\hat\theta) \nabla r_t(\hat\theta)^{\top} \big)_{\dim{\theta} \times \dim{\theta}}$ and $\big( \nabla^2r_t(\hat\theta) \big)_{\dim{\theta} \times \dim{\theta}}$ have to be computed for each $t = p + 1,...,n$. Differentiating $r_t$ with respect to its parameters we get $\frac{\partial r_t}{\partial \theta_i} = 2 (F_t - x_t)\frac{\partial F_t}{\partial \theta_i} = (\nabla r_t)_i$ and $\frac{\partial^2 r_t}{\partial \theta_i \partial \theta_j} = 2 \bigg( \frac{\partial F_t}{\partial \theta_i} \frac{\partial F_t}{\partial \theta_j} + (F_t - x_t)\frac{\partial^2 F_t}{\partial \theta_i \partial \theta_j} \bigg) = (\nabla^2 r_t)_{i,j}$. The respective derivatives of skeleton $F_t$ are elements of a gradient vector $(\nabla F_t)_{\dim{\theta}}$ and Hessian $(\nabla^2 F_t)_{\dim{\theta} \times \dim{\theta}}$. It suffices to compute the elements of $\nabla F_t$ and $\nabla^2 F_t$ to estimate the mean residual square (`rs`) Hessian and information matrix, and use the above formulas.
+
+The skeleton gradient and Hessian can be divided into sub-matrices according to the differentiated variable:
+
+$$
+\nabla F_t = 
+\begin{pmatrix}
+\nabla_{\boldsymbol{\phi}}F_t \\
+\nabla_{\boldsymbol{\gamma}}F_t \\
+\nabla_{\boldsymbol{c}}F_t
+\end{pmatrix} \ , \quad \boldsymbol{\phi} = (\phi_1,...,\phi_m)^{\top} \ , \ \boldsymbol{\gamma} = (\gamma_1,...,\gamma_{m-1})^{\top} \ , \ \boldsymbol{c} = (c_1,...,c_{m-1})^{\top}
+$$
+
+$$
+\nabla^2 F_t = 
+\begin{pmatrix}
+\nabla_{\boldsymbol{\phi}, \boldsymbol{\phi}}^2 F_t & \nabla_{\boldsymbol{\phi},\boldsymbol{\gamma}}^2 F_t & \nabla_{\boldsymbol{\phi},\boldsymbol{c}}^2 F_t \\
+(\nabla_{\boldsymbol{\phi},\boldsymbol{\gamma}}^2  F_t)^{\top} & \nabla_{\boldsymbol{\gamma}, \boldsymbol{\gamma}}^2 F_t & \nabla_{\boldsymbol{\gamma},\boldsymbol{c}}^2 F_t \\
+(\nabla_{\boldsymbol{\phi},\boldsymbol{c}}^2 F_t)^{\top} & (\nabla_{\boldsymbol{\gamma},\boldsymbol{c}}^2 F_t)^{\top} & \nabla_{\boldsymbol{c}, \boldsymbol{c}}^2 F_t
+\end{pmatrix}
+$$
+
+Now take $\boldsymbol{\phi}^{(+)} = \boldsymbol{\phi}$ and $\boldsymbol{\phi}^{(-)} = ( \textbf{0}_{(p+1)\times 1}, \phi_1,...,\phi_{m-1})^{\top}$, and also create a transition vector $\boldsymbol{G}_t = (1, G(x_{t-d},\gamma_1,c_1), ..., G(x_{t-d},\gamma_{m-1},c_{m-1}))^{\top}$. Then the skeleton can be expressed as:
+
+$$
+F_t = \boldsymbol{G}_t^{\top}(\boldsymbol{\phi}^{(+)} - \boldsymbol{\phi}^{(-)})\boldsymbol{Y}_t
+$$
+ We notice that since parameters $\phi_{j,i}$ are linear, we get $\nabla_{\boldsymbol{\phi}, \boldsymbol{\phi}}^2 F_t = \textbf{0}_{m(p+1) \times m(p+1)}$. Similarly, we can then fill in the remaining derivatives:
+ 
+$$
+\nabla_{\boldsymbol{\phi}}F_t = \begin{pmatrix}
+(1 - G(x_{t-d},\gamma_1, c_1)) \boldsymbol{Y}_t \\
+(G(x_{t-d},\gamma_1, c_1) - G(x_{t-d},\gamma_2, c_2)) \boldsymbol{Y}_t \\
+\vdots \\
+(G(x_{t-d},\gamma_{m-1}, c_{m-1}) - 0) \boldsymbol{Y}_t
+\end{pmatrix} \ , \
+\nabla_{\boldsymbol{\gamma}}F_t = \begin{pmatrix}
+\frac{\partial G}{\partial \gamma_1}(x_{t-d},\gamma_{1}, c_{1})(\phi_2-\phi_1)^{\top} \boldsymbol{Y}_t \\
+\frac{\partial G}{\partial \gamma_2}(x_{t-d},\gamma_{2}, c_{2})(\phi_3-\phi_2)^{\top} \boldsymbol{Y}_t \\
+\vdots \\
+\frac{\partial G}{\partial \gamma_{m-1}}(x_{t-d},\gamma_{m-1}, c_{m-1})(\phi_{m}-\phi_{m-1})^{\top} \boldsymbol{Y}_t \\
+\end{pmatrix}
+$$
+$$
+\nabla_{\boldsymbol{c}}F_t = \begin{pmatrix}
+\vdots \\
+\text{analogously to } \nabla_{\boldsymbol{\gamma}} \\
+\vdots
+\end{pmatrix}
+$$
+ 
+$$
+\nabla_{\boldsymbol{\phi},\boldsymbol{\gamma}}^2 F_t = \begin{pmatrix}
+-\frac{\partial (\boldsymbol{G}_t)_2}{\partial \gamma_1} \boldsymbol{Y}_t & \textbf{0}_{(p+1)\times 1} & ... & \textbf{0}_{(p+1)\times 1} \\
+\frac{\partial (\boldsymbol{G}_t)_2}{\partial \gamma_1} \boldsymbol{Y}_t & -\frac{\partial (\boldsymbol{G}_t)_3}{\partial \gamma_2} \boldsymbol{Y}_t & ... & \textbf{0}_{(p+1)\times 1}  \\
+\textbf{0}_{(p+1)\times 1} & \frac{\partial (\boldsymbol{G}_t)_3}{\partial \gamma_2} \boldsymbol{Y}_t & ... & \textbf{0}_{(p+1)\times 1} \\
+\vdots & \vdots & \ddots & \vdots \\
+\textbf{0}_{(p+1)\times 1} & \textbf{0}_{(p+1)\times 1} & ... & -\frac{\partial (\boldsymbol{G}_t)_{m}}{\partial \gamma_{m-1}} \boldsymbol{Y}_t \\
+\textbf{0}_{(p+1)\times 1} & \textbf{0}_{(p+1)\times 1} & ... & \frac{\partial (\boldsymbol{G}_t)_{m}}{\partial \gamma_{m-1}} \boldsymbol{Y}_t 
+\end{pmatrix} \ , \
+\nabla_{\boldsymbol{\phi},\boldsymbol{c}}^2 F_t = \begin{pmatrix}
+\vdots \\
+... \ \text{analogously to } \nabla_{\boldsymbol{\phi},\boldsymbol{\gamma}}^2 \ ... \\
+\vdots
+\end{pmatrix}
+$$
+ 
+$$
+\nabla_{\boldsymbol{\gamma}, \boldsymbol{\gamma}}^2 F_t = \text{diag}\bigg( \frac{\partial G}{\partial \gamma_1}(x_{t-d},\gamma_1,c_1)(\phi_2 - \phi_1)^{\top}\boldsymbol{Y}_t, ... , \frac{\partial G}{\partial \gamma_{m-1}}(x_{t-d},\gamma_{m-1},c_{m-1})(\phi_{m} - \phi_{m-1})^{\top}\boldsymbol{Y}_t \bigg)
+$$
+
+$$
+\nabla_{\boldsymbol{c}, \boldsymbol{c}}^2 F_t \ \text{ and } \ \nabla_{\boldsymbol{\gamma}, \boldsymbol{c}}^2 F_t = \text{diag}\big( \ ... \ \text{analogously to }\nabla_{\boldsymbol{\gamma}, \boldsymbol{\gamma}}^2 \ ... \ \big)
+$$
+ 
+ Note that all matrices marked with "$\text{analogously to...}$" contain their respective derivatives of the transition function $G$. These will be filled in according
+ to its respective type (logistic, exponential):
+ 
+$$
+\begin{matrix}
+G_E(x_{t-d},\gamma,c) = 1 - \text{e}^{-\gamma(x_{t-d}-c)^2} & & &  G_L(x_{t-d},\gamma,c) = \frac{1}{1 + \text{e}^{-\gamma(x_{t-d}-c)}}
+\\ \\
+\frac{\partial G_E}{\partial \gamma} = \text{e}^{-\gamma(c - x_{t-d})^2} (c - x_{t-d})^2 & & & \frac{\partial G_L}{\partial \gamma} = \frac{\text{e}^{-\gamma(x_{t-d}-c)}(x_{t-d}-c)}{\big(1 + \text{e}^{-\gamma(x_{t-d}-c)} \big)^2}
+\\ \\
+\frac{\partial G_E}{\partial c} = 2\text{e}^{-\gamma(c - x_{t-d})^2} \gamma (c - x_{t-d}) & & & \frac{\partial G_L}{\partial c} = -\frac{\gamma\text{e}^{-\gamma(x_{t-d}-c)}}{\big(\text{e}^{c \gamma} + \text{e}^{\gamma x_{t-d}} \big)^2}
+\\ \\
+\frac{\partial^2 G_E}{\partial \gamma \partial c} = -2\text{e}^{-\gamma(c - x_{t-d})^2}(c - x_{t-d})(c^2 \gamma - 2 c x_{t-d} + \gamma x_{t-d}^2 \gamma - 1) & & & \frac{\partial^2 G_L}{\partial \gamma \partial c} = -\frac{\text{e}^{\gamma(x_{t-d} - c)}(1 - c \gamma + x_{t-d} \gamma + \text{e}^{\gamma(x_{t-d} - c)}(1 + c\gamma - x_{t-d} \gamma))}{(1 + \text{e}^{\gamma(x_{t-d}-c)})^3}
+\\ \\
+\frac{\partial^2 G_E}{\partial c^2} = -2 \text{e}^{-\gamma (c - x_{t-d})^2} \gamma (2 c^2 \gamma - 4 c x_{t-d} \gamma + 2 x_{t-d}^2 \gamma - 1) & & & \frac{\partial^2 G_L}{\partial c^2} = \frac{\text{e}^{\gamma(x_{t-d}+c)}\gamma^2 (\text{e}^{c \gamma} - \text{e}^{x_{t-d} \gamma})}{(\text{e}^{c \gamma} + \text{e}^{x_{t-d} \gamma})^3}
+\\ \\
+\frac{\partial^2 G_E}{\partial \gamma^2} = -\text{e}^{-\gamma(c-x_{t-d})^2}(c - x_{t-d})^4 & & & \frac{\text{e}^{\gamma(c+x_{t-d})}(c - x_{t-d})^2(\text{e}^{c \gamma} - \text{e}^{x_{t-d} \gamma}))}{(\text{e}^{c \gamma} + \text{e}^{x_{t-d} \gamma})^3}
+\end{matrix}
+$$
+
+Then we use the above results in the following implementation:
+
+```{r stdErrEstim, echo=T}
+# ==== estimate standard errors of STAR parms: (Phi, gamma, c) ====
 starParamCovMatrix <- function(x, p, d, res, Phi, gamma, c, z=x, m=2, type=c("logistic", "exponential")) {
+  # implementing this was tedious, and I can only test the symmetry of the result matrix
   type <- match.arg(type)
   n <- length(x); k <- p; times <- (k + 1):n;
   
@@ -2319,8 +2464,8 @@ starParamCovMatrix <- function(x, p, d, res, Phi, gamma, c, z=x, m=2, type=c("lo
     cbind( diag(d2G_dgammadc[,t], nrow=(m-1), ncol=(m-1)), diag(d2G_dc2[,t], nrow=(m-1), ncol=(m-1)) )
   ))
   skelHessians <- lapply(1:(n - k), function(t) rbind(
-    cbind(zeros, PhiCornerMatrices[[t]]) * Ym[,t],
-    cbind(t(PhiCornerMatrices[[t]]) * Ym[,t], 
+    cbind(zeros, PhiCornerMatrices[[t]]* Ym[,t]),
+    cbind(t(PhiCornerMatrices[[t]]* Ym[,t]) , 
           PhiDiagMatrices[[t]] * 
             do.call(cbind, 
               replicate(2, do.call(rbind, replicate(2, 
@@ -2328,82 +2473,44 @@ starParamCovMatrix <- function(x, p, d, res, Phi, gamma, c, z=x, m=2, type=c("lo
             simplify=F)),simplify=F))
     )
   ))
-  rssHessians <- lapply(1:(n - k), function(t) 
-    2 * (sapply(1:dim_par, function(i) sapply(1:dim_par, function(j) 
-      skelGrad[i, t] * skelGrad[j, t])) -  res[t,] * skelHessians[[t]])
+  rsGradients <- lapply(1:(n - k), function(t)
+    2 * res[t,] * skelGrad[,t]
   )
-  MeanHessian <- Reduce('+', rssHessians) / (n - k)
-  rssGrads <- lapply(1:(n - k), function(t) skelGrad[,t] %*% t(skelGrad[,t]))
-  MeanInfMatrix <- Reduce('+', rssGrads) / (n - k)
+  rsHessians <- lapply(1:(n - k), function(t) 
+    2 * (sapply(1:dim_par, function(i) sapply(1:dim_par, function(j) 
+      skelGrad[i, t] * skelGrad[j, t])) + res[t,] * skelHessians[[t]])
+  )
+  MeanHessian <- Reduce('+', rsHessians) / (n - k)
+  rsGrads <- lapply(1:(n - k), function(t) rsGradients[[t]] %*% t(rsGradients[[t]]))
+  MeanInfMatrix <- Reduce('+', rsGrads) / (n - k)
   invMeanHessian <- inv(MeanHessian)
   # parameter covariance matrix estimate
-  invMeanHessian %*% MeanInfMatrix %*% invMeanHessian / n
+  (invMeanHessian %*% MeanInfMatrix %*% invMeanHessian) / n
 }
+```
 
+```{r testParamEstim}
+p=2; d=1;
 # 2 regimes
-model <- EstimSTAR_m(xt, p=2, d=2, c=0.1, gamma=10)
-Phi = model$PhiParams
+m = 2; c=-0.1; gamma=10;
+model <- EstimSTAR_m(xt, p=p, d=d, c=c, gamma=gamma, m=m)
+cat(paste0("\n",model$name, " PhiParams & standard errors:\n Phi:"))
+( Phi = model$PhiParams )
+cat("Phi_se:")
 res = model$residuals
-starParamCovMatrix(xt, p=2, d=2, res, Phi, c=0.1, gamma=10)
+sqrt( diag(starParamCovMatrix(xt, p=p, d=d, res, Phi, c=c, gamma=gamma, m=m))[1:(m*(p+1))] )
 
 # 3 regimes
-model <- EstimSTAR_m(xt, p=2, d=2, c=c(0.1,0.2), gamma=c(10,11), m=3)
-Phi = model$PhiParams
+m = 3; c=c(-0.1,0.1); gamma=c(10,11);
+model <- EstimSTAR_m(xt, p=p, d=d, c=c, gamma=gamma, m=m)
+cat(paste0("\n",model$name, " PhiParams & standard errors:\n Phi:"))
+( Phi = model$PhiParams )
+cat("Phi_se:")
 res = model$residuals
-starParamCovMatrix(xt, p=2, d=2, res, Phi, c=c(0.1,0.2), gamma=c(10,11), m=3)
+sqrt( diag(starParamCovMatrix(xt, p=p, d=d, res, Phi, c=c, gamma=gamma, m=m))[1:(m*(p+1))] )
 ```
 
-```{r mEstimSTARDef, echo=T}
-EstimSTAR_m <- function(x, p, d, c, gamma, m=2, type=c("logistic", "exponential")) {
-  type <- match.arg(type)
-  m = as.integer(m)
-  if (m <= 0) {
-    message("Error: regime count m has to be a positive integer")
-    return(NA)
-  }
-  if (length(c) != m - 1) {
-    message("Error: Incompatible dimensions of threshold vector and regime count.");
-    return(NA)
-  }
-  
-  resultModel <- list()
-  resultModel$nReg <- m; resultModel$type <- type
-  resultModel$p = p; resultModel$d = d; 
-  resultModel$c = c; resultModel$gamma = gamma;
-  resultModel$data = x; n = length(x); resultModel$n = n;
-  
-  X <- as.matrix(apply(as.matrix((p + 1):n), MARGIN=1, function(t) Xt_m(x, t, p, d, c, gamma, m) ))
-  y <- as.matrix(x[(p + 1):n])
-  K <- crossprod(t(X), t(X)); b <- crossprod(t(X), y);
-  detK <- abs(det(K))
-  
-  if (detK < 0.000001) {
-    return(NA)
-  } else {
-    K <- inv(K)
-    sol_phi <- as.numeric(t(K %*% b)); sol_se <- sqrt(diag(K)/n);
-    eps <- 0.01;
-    # filter out those coeffs that are of the same order of magnitude as their errors
-    filter <- sapply(1:(m * (p + 1)), function (i) ifelse(
-        abs(sol_phi[i]) <= 2 * abs(sol_se[i]), 0, 1
-       )
-    )
-    sol_phi <- sol_phi * filter
-    sol_se <- sol_se * filter
-    solution <- cbind(phi = sol_phi, se = sol_se)
-    resultModel$PhiParams <- solution[,1] # solving (X'X)*phi = X'y
-    resultModel$PhiStErrors <- solution[,2] # standard errors
-    skel <- crossprod(X, resultModel$PhiParams); resultModel$skel <- skel;
-    resultModel$residuals <- (y - skel)
-    resultModel$resSigmaSq <- 1 / (n - p) * sum(resultModel$residuals^2)
-
-    return(resultModel)
-  }
-}
-
-str( EstimSTAR_m(xt, p=2, d=2, c=0, gamma=10) ) # 2 regimes
-str( EstimSTAR_m(xt, p=2, d=2, c=c(0, 0.2), gamma=c(10, 12), m=3) ) # 3 regimes
-```
+This procedure can then be added to the postprocessing method:
 
 ```{r mEstimSTARPostprocDef, echo=T}
 EstimSTAR_m_postproc <- function(model) {
@@ -2412,26 +2519,13 @@ EstimSTAR_m_postproc <- function(model) {
   type <- model$type
 
   y <- as.matrix(x[(p + 1):n])
-  skel <- model$skel;
-
-  # count valid p orders
-  pOrders <- rowSums(
-    matrix(as.numeric((
-      sapply(1:(m * (p + 1)),
-      function(i) ifelse( (i %% (p + 1) != 1 && model$PhiParams[i] != 0), 1, 0) )
-      )), nrow=m, byrow=T)
-  )
-  model$pOrders <- pOrders
+  Phi <- model$PhiParams;
+  model$PhiStErrors <- sqrt( diag(starParamCovMatrix(xt, p=p, d=d, res, Phi, c=c, gamma=gamma, m=m))[1:(m*(p+1))] )
 
   # Information criteria
   starIC <- as.list(IC(n=n, p=p, sigmaSq=model$resSigmaSq, m=m))
   model$AIC <- starIC$AIC
   model$BIC <- starIC$BIC
-  c <- round(c, digits=3); gamma <- round(gamma, digits=3) # 3 dec. places seems enough
-  model$name <- paste0(ifelse(type == "logistic", "L", "E"),
-                "STAR(", p, ",", d, ",", 
-                paste(na.omit(c), collapse=','),",", 
-                paste(na.omit(gamma), collapse=','), ")")
   return(model)
 }
 
@@ -2510,6 +2604,8 @@ head(models_s_Out, n=12)
 Again, we sorted the models by their $BIC$. We seem to have a rather small sample, but that is most likely due to only having `r length(hypars)` 
 models with detected $STAR$-type nonlinearity. Estimated parameters were obtained during the postprocessing phase on a model with lowest $\hat\sigma_{\varepsilon}^2$.
 
+On top of that the postprocessing phase also contains an estimation of standard errors of parameters:
+
 ```{r}
 models_s_CoeffErrors <- list()
 for(o in orders_s) {
@@ -2524,6 +2620,9 @@ for(o in orders_s) {
 }
 models_s_CoeffErrors
 ```
+
+### 6.4 Visualisation
+
 
 
 
