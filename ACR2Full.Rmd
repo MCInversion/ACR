@@ -198,7 +198,7 @@ which in an essence means that the process "influences its regime" up to d time 
 For the purposes of this analysis we consider only 2 regimes, namely the regime of "job crisis" when the unemployment rate may 
 fluctuate or drop more wildly compared to the regime of "job stability" when the unemployment rate stabilizes or grows.
 
-### 2.1: Implementation of Useful Functions
+### 2.1: Useful Functions
 
 First, we define a, so called, "indicator function" which essentially returns a boolean value from a given input process
   value `x` and threshold value `c`:
@@ -235,7 +235,7 @@ x_eval <- xt[(nt + 1):length(xt)] # extract eval part
 xt <- x_train # set the source data to test part values
 ```
 
-```{r}
+```{r, echo=T}
 d <- 1; t <- 3;
 xt[(t - d): t]
 Xt(xt, t, p, d, c = 0)
@@ -325,6 +325,8 @@ EstimSETAR <- function(x, p, d, c) {
     skel <- crossprod(X, resultModel$PhiParams); resultModel$skel <- skel;
     resultModel$residuals <- (y - skel)
     resultModel$resSigmaSq <- 1 / (n - k) * sum(resultModel$residuals ^ 2)
+    resultModel$name <- paste0("SETAR(",p,",",d,",",round(c,3),")")
+    resultModel$nReg <- 2 # 2 regimes
     
     return(resultModel)
   } else {
@@ -438,7 +440,7 @@ for(i in 1:12) {
   p <- models[[ orders[i] ]]$p
   d <- models[[ orders[i] ]]$d
   c <- models[[ orders[i] ]]$c
-  key <- paste(p, d, round(c, digits=4), sep="/")
+  key <- paste0(p, d, round(c, digits=4), sep="/")
   modelCoeffErrors[[key]] <- rbind(t(models[[ orders[i] ]]$PhiParams),
                                    t(models[[ orders[i] ]]$PhiStErrors))
   row.names(modelCoeffErrors[[key]]) <- t(c("Phi", "stdError"))
@@ -462,7 +464,7 @@ for (i in 1:3) {
   legend("topleft", legend=c("fitted SETAR"), col=c("blue"), lty=1, lwd=2, cex=0.8)
   
   plot(x=dat$time[1:plotNmax], y=model$residuals[1:plotNmax], type="l", 
-       main=paste("SETAR(",model$p,",",model$d,",",round(model$c, digits=4),") Residuals"),
+       main=paste0("SETAR(",model$p,",",model$d,",",round(model$c, digits=4),") Residuals"),
        xlab="year", ylab="%")
 }
 ```
@@ -567,11 +569,11 @@ for (i in 1:3) {
   }
   lines(x=dat$time[(k + 1):plotNmax], y=s[1:(plotNmax - k)], col=c("blue","purple","red")[i],lwd=2)
 }
-legend("topleft", legend=c(paste("SETAR(",models[[orders[1] ]]$p,",",models[[orders[1] ]]$d,",",
+legend("topleft", legend=c(paste0("SETAR(",models[[orders[1] ]]$p,",",models[[orders[1] ]]$d,",",
                                  round(models[[orders[1] ]]$c, digits=4),")"),
-                           paste("SETAR(",models[[orders[2] ]]$p,",",models[[orders[2] ]]$d,",",
+                           paste0("SETAR(",models[[orders[2] ]]$p,",",models[[orders[2] ]]$d,",",
                                  round(models[[orders[2] ]]$c, digits=4),")"),
-                           paste("SETAR(",models[[orders[3] ]]$p,",",models[[orders[3] ]]$d,",",
+                           paste0("SETAR(",models[[orders[3] ]]$p,",",models[[orders[3] ]]$d,",",
                                  round(models[[orders[3] ]]$c, digits=4),")")), 
        col=c("blue","purple","red"), lty=1, lwd=2, cex=0.8)
 ```
@@ -747,7 +749,7 @@ for (i in 1:3) {
   p <- models[[ orders[i] ]]$p
   d <- models[[ orders[i] ]]$d
   c <- round(models[[ orders[i] ]]$c, digits=4)
-  results[[i]] <- paste("SETAR(", p,",", d,",", c,")" )
+  results[[i]] <- paste0("SETAR(", p,",", d,",", c,")" )
 }
 data.frame(unlist(results))
 ```
@@ -794,7 +796,7 @@ for (i in 1:12) {
   p <- models[[ orders[i] ]]$p
   d <- models[[ orders[i] ]]$d
   c <- models[[ orders[i] ]]$c
-  keys[i] <- paste(p, d, round(c, digits=3), sep=" / ")
+  keys[i] <- paste0(p, d, round(c, digits=3), sep=" / ")
   hansenResults[i,] <- Hansen(d, c, models[[ orders[i] ]]$PhiParams)
 }
 row.names(hansenResults) <- keys
@@ -904,7 +906,7 @@ for (i in 1:3) {
   p <- nullHyp$p[i]
   d <- nullHyp$d[i]
   c <- nullHyp$c[i]
-  res[[i]] <- paste("SETAR(", p,",", d,",", c,")" )
+  res[[i]] <- paste0("SETAR(", p,",", d,",", c,")" )
 }
 data.frame(unlist(res))
 ```
@@ -1150,35 +1152,27 @@ iid process, the correlation integral should approach $C(q,r) \rightarrow C(1, r
 
 ```{r bdsTesting}
 
-nlinOrders <- c() # buffer to store indices for models with possible nonlinearities
+nlinOrders <- c() # buffer to store indices for models with setar3 candidates
 nlinNames <- c()
-oldNlinOrders <- c()
-for (i in 1:nonLinCount) { # length(nonLinOrders)
-  test <- tseries::bds.test(na.omit(nonlinear[[i]]$residuals), m = 3)
-  p <- nonlinear[[i]]$p
-  d <- nonlinear[[i]]$d
-  c <- nonlinear[[i]]$c
-  name <- nonlinear[[i]]$name
+for (i in 1:12) { # length(nonLinOrders)
+  test <- tseries::bds.test(na.omit(models[[ orders[i] ]]$residuals), m = 3)
+  p <- models[[ orders[i] ]]$p
+  d <- models[[ orders[i] ]]$d
+  c <- models[[ orders[i] ]]$c
+  name <- models[[ orders[i] ]]$name 
   if ( mean(c(test$p.value) > alpha) > 0.5 ) {
-    cat("possible remaining nonlinearity for",name ," with mean p-val = ", mean(c(test$p.value) > alpha), "\n")
-    nlinOrders <- c(nlinOrders, i)
-    oldNlinOrders <- c(oldNlinOrders, nonLinOrders[i])
-    nlinNames <- c(nlinNames, name)
-  } else {
     cat("remaining nonlinearity rejected ", name," with mean p-val = ", mean(c(test$p.value) > alpha), "\n")
+  } else {
+    cat("possible remaining nonlinearity for",name ," with mean p-val = ", mean(c(test$p.value) > alpha), "\n")
+    nlinOrders <- c(nlinOrders, orders[i])
+    nlinNames <- c(nlinNames, name)
   }
 }
-
-nonlinear <- sapply(1:length(nlinOrders), function(i) nonlinear[[ nlinOrders[i] ]])
-nonLinOrders <- oldNlinOrders
-cat("==== Remaining nonlinearities detected for: ======\n")
-
+# nonLinOrders <- oldNlinOrders
+cat("\n==== Remaining nonlinearities detected for: ======\n")
 nlinNames
 
 ```
-
-After filtering out the models with remaining nonlinearity, and since we get 3 models with the same $d$ parameter, it will be enough to build
-just one SETAR3.
 
 ### 4.3 SETAR3 Parameter Estimation
 
@@ -1405,7 +1399,7 @@ with detected remaining nonlinearity:
 
 ```{r}
 cat(" unique delays: ")
-( delays <- unique(sapply(1:length(nonlinear), function(i) nonlinear[[i]]$d)) )
+( delays <- unique(sapply(1:length(nlinOrders), function(i) models[[ nlinOrders[i] ]]$d)) )
 ```
 
 Still, even after this alleviation, the search might be computationally demanding. To obtain our results within reasonable time
@@ -1546,14 +1540,9 @@ SETAR3 nonlinearity was detected in `r length(nonlinear)` of the original SETAR2
 newly found SETAR3's:
 
 ```{r}
-# set regime count of old models to 2
-for (i in 1:length(models)) {
-  models[[ orders[i] ]]$nReg <- 2;
-  models[[ orders[i] ]]$name <- getModelName(models[[ orders[i] ]])
-}
 # replace nonlinear
-for (i in 1:length(nonlinear)) {
-  models[[ nonLinOrders[i] ]] <- models3[[ orders3[i] ]]
+for (i in 1:length(nlinOrders)) {
+  models[[ nlinOrders[i] ]] <- models3[[ orders3[i] ]]
 }
 BICs_revised <- sapply(models, function(m) m$BIC)
 orders <- order(BICs_revised)
@@ -1710,7 +1699,7 @@ PredictSETAR <- function(
 
     for(t in (tmin + (1:n_ahead))) {
       x_res[t] <- SETAR_m_singleStep(eval.model, x_res, t)
-      x_res[t] <- x_res[t] + noise[t - tmin]
+      if (!single.step) x_res[t] <- x_res[t] + noise[t - tmin]
     }
     
     if (!single.step) {
@@ -1800,8 +1789,8 @@ To test other prediction results, such as confidence intervals and simulation pa
 
 ```{r}
 predictSETAR_andPlot <- function(
-  model, time, x_train, x_eval, pred_type=c("naive", "MC", "bootstrap"),
-  single.step=T, plot.paths=T, print.rmse=T, alpha=0.2, plot.leg=F, legend.pos="top"
+  model, time, x_train, x_eval, pred_type=c("naive", "MC", "bootstrap"), Nboot=100,
+  single.step=T, refit=F, plot.paths=T, print.rmse=T, alpha=0.2, plot.leg=F, legend.pos="top", plt_range=NA
 ) {
   ne <- length(x_eval); nt <- length(x_train)
   xt <- c(x_train, x_eval)
@@ -1809,7 +1798,8 @@ predictSETAR_andPlot <- function(
   if (pred_type == "naive" && plot.paths) plot.paths <- F # no reason to plot paths of a naive pred
   if (single.step) { n_ahead <- 1 } else { n_ahead <- ne + 1} 
 
-  predict <- PredictSETAR(model, x_train, x_eval, single.step=single.step, n_ahead=n_ahead, type=pred_type, return.paths=plot.paths, alpha=alpha)
+  predict <- PredictSETAR(model, x_train, x_eval, single.step=single.step, Nboot=Nboot, n_ahead=n_ahead, 
+                          type=pred_type, return.paths=plot.paths, alpha=alpha, refit=refit)
   x <- predict$pred
   
   err_low <- predict$se[,1]
@@ -1819,49 +1809,51 @@ predictSETAR_andPlot <- function(
   
   history <- as.integer(0.02 * nt)
   x_all <- c(xt, x, err_low, err_high, x_paths)
-  plt_range <- 1.3 * c(min(x_all, na.rm=T), max(x_all, na.rm=T))
+  if (as.logical(sum(is.na(plt_range)))) {
+    plt_range <-  1.2 * c(min(x_all, na.rm=T), max(x_all, na.rm=T))
+  }
   time_range <- (nt - history):(nt + ne)
   pred_range <- 1:(ne + 1)
   
   c <- model$c
 
-  method_name <- paste0(
-    switch(pred_type, "naive" = "Naive", "MC" = "Monte Carlo", "bootstrap" = "Bootstrap"), 
+  method_name <-  paste0(ifelse(single.step, "",
+    switch(pred_type, "naive" = "Naive", "MC" = "Monte Carlo", "bootstrap" = "Bootstrap")), 
     " (", n_ahead, "-step) ", ifelse(plot.paths, "sim", ""), ifelse(print.rmse, paste("\n RMSE =", round(sqrt(predict$MSE), digits=4)), ""))
-  method_name_short <- paste0(pred_type, " (", n_ahead, "-step) ")
+  method_name_short <- paste0(ifelse(single.step,"", pred_type), " (", n_ahead, "-step) ")
   
   if (plot.leg) {
     if (length(c) > 1) {
       legend_names <- c("data", method_name_short, 
-                        ifelse(pred_type != "naive", paste0((1 - predict$alpha) * 100,"% conf.interval   "), NA), "c1", "c2", ifelse(plot.paths, "paths", NA))
-      legend_col <- c("black", "dodgerblue3", ifelse(pred_type != "naive", "dodgerblue2", NA), "brown3", "green3", ifelse(plot.paths, gray(0.6, alpha=0.2), NA))
-      legend_lty <- c(NA, 1, ifelse(pred_type != "naive", 2, NA), 2, 2, ifelse(plot.paths, 1, NA))
+                        ifelse(pred_type != "naive" && !single.step, paste0((1 - predict$alpha) * 100,"% conf.interval   "), NA), "c1", "c2", ifelse(plot.paths, "paths", NA))
+      legend_col <- c("black", "dodgerblue3", ifelse(pred_type != "naive" && !single.step, "dodgerblue2", NA), "brown3", "green3", ifelse(plot.paths, gray(0.6, alpha=0.2), NA))
+      legend_lty <- c(NA, 1, ifelse(pred_type != "naive" && !single.step, 2, NA), 2, 2, ifelse(plot.paths, 1, NA))
       legend_pch <- c(1, NA, NA, NA, NA, NA)
-      legend_lwd <- c(2, 2, ifelse(pred_type != "naive", 2, NA), 2, 2, ifelse(plot.paths, 1, NA))
+      legend_lwd <- c(2, 2, ifelse(pred_type != "naive" && !single.step, 2, NA), 2, 2, ifelse(plot.paths, 1, NA))
     } else {
       legend_names <- c("data", method_name_short, 
-                        ifelse(pred_type != "naive", paste0((1 - predict$alpha) * 100,"% conf.interval   "), NA), "c", ifelse(plot.paths, "paths", NA))
-      legend_col <- c("black", "dodgerblue3", ifelse(pred_type != "naive", "dodgerblue2", NA), "green3", ifelse(plot.paths, gray(0.6, alpha=0.2), NA))
-      legend_lty <- c(NA, 1, ifelse(pred_type != "naive", 2, NA), 2, ifelse(plot.paths, 1, NA))
+                        ifelse(pred_type != "naive" && !single.step, paste0((1 - predict$alpha) * 100,"% conf.interval   "), NA), "c", ifelse(plot.paths, "paths", NA))
+      legend_col <- c("black", "dodgerblue3", ifelse(pred_type != "naive" && !single.step, "dodgerblue2", NA), "green3", ifelse(plot.paths, gray(0.6, alpha=0.2), NA))
+      legend_lty <- c(NA, 1, ifelse(pred_type != "naive" && !single.step, 2, NA), 2, ifelse(plot.paths, 1, NA))
       legend_pch <- c(1, NA, NA, NA, NA)
-      legend_lwd <- c(2, 2, ifelse(pred_type != "naive", 2, NA), 2, ifelse(plot.paths, 1, NA))
+      legend_lwd <- c(2, 2, ifelse(pred_type != "naive" && !single.step, 2, NA), 2, ifelse(plot.paths, 1, NA))
     }    
   }
   
   plot(x=dat$time[time_range],y=xt[time_range], type="b", lwd=2,
      ylim=plt_range, main=paste(model$name, method_name), xlab="t", ylab="x[%]")
+  # simulations
+  if (plot.paths) matlines(x=matrix(time[(nt - 1) + pred_range], byrow=T), y=x_paths, col=gray(0.6, alpha=0.2), lty=1)
   # conf. interval fill
-  if (pred_type != "naive") {
+  if (pred_type != "naive" && !single.step) {
   polygon(
     x=c(time[(nt - 1) + pred_range], rev(time[(nt - 1) + pred_range])), y=c(err_low[pred_range],rev(err_high[pred_range])), 
         col=adjustcolor("dodgerblue2", alpha.f=0.3), border=F)      
   }
-  # simulations
-  if (plot.paths) matlines(x=matrix(time[(nt - 1) + pred_range], byrow=T), y=x_paths, col=gray(0.6, alpha=0.2), lty=1)
   # x
   lines(x=time[(nt - 1) + pred_range], y=x[pred_range], col="dodgerblue3", lwd=2)
   # conf. intervals
-  if (pred_type != "naive") {
+  if (pred_type != "naive" && !single.step) {
     lines(x=time[(nt - 1) + pred_range], y=err_low[pred_range], col="dodgerblue2", lwd=2, lty="dashed")
     lines(x=time[(nt - 1) + pred_range], y=err_high[pred_range], col="dodgerblue2", lwd=2, lty="dashed")        
   }
@@ -1885,48 +1877,24 @@ predictSETAR_andPlot <- function(
 ```{r predictPlot1, echo=T, fig.width=10, fig.height=4}
 par(mfrow=c(1, 1))
 predictSETAR_andPlot(
-  models[[ orders[3] ]], time=dat$time, x_train=x_train, x_eval=x_eval, 
+  models[[ orders[6] ]], time=dat$time, x_train=x_train, x_eval=x_eval, 
   pred_type="MC", single.step=T, plot.paths=F, plot.leg=T)
 
 predictSETAR_andPlot(
-  models[[ orders[3] ]], time=dat$time, x_train=x_train, x_eval=x_eval, 
-  pred_type="MC", single.step=F, plot.paths=T, plot.leg=T)
+  models[[ orders[6] ]], time=dat$time, x_train=x_train, x_eval=x_eval, 
+  pred_type="MC", single.step=F, plot.paths=T, plot.leg=T, plt_range=c(-2,6))
 ```
 
 Now we possess all necessary tools to proceed evaluating our SETAR models according to their predictive abilities.
 
 ### 5.2 Single-Step Predictions of SETAR Models
 
-#### Naive:
-
 ```{r singleStepNaivePlots, fig.width=11, fig.height=4}
 par(mfrow=c(1, 2))
 for (i in 1:12) {
   predictSETAR_andPlot(
   models[[ orders[i] ]], time=dat$time, x_train=x_train, x_eval=x_eval, 
-  pred_type="naive", single.step=T, plot.paths=F)
-}
-```
-
-#### Monte Carlo:
-
-```{r singleStepMCPlots, fig.width=11, fig.height=3.6}
-par(mfrow=c(1, 2))
-for (i in 1:12) {
-  predictSETAR_andPlot(
-  models[[ orders[i] ]], time=dat$time, x_train=x_train, x_eval=x_eval, 
-  pred_type="MC", single.step=T, plot.paths=F)
-}
-```
-
-#### Bootstrap:
-
-```{r singleStepBootPlots, fig.width=11, fig.height=3.6}
-par(mfrow=c(1, 2))
-for (i in 1:12) {
-  predictSETAR_andPlot(
-  models[[ orders[i] ]], time=dat$time, x_train=x_train, x_eval=x_eval, 
-  pred_type="bootstrap", single.step=T, plot.paths=F)
+  refit=T, single.step=T, plot.paths=F)
 }
 ```
 
@@ -1939,7 +1907,7 @@ par(mfrow=c(1, 2))
 for (i in 1:12) {
   predictSETAR_andPlot(
   models[[ orders[i] ]], time=dat$time, x_train=x_train, x_eval=x_eval, 
-  pred_type="MC", single.step=F, plot.paths=T)
+  pred_type="MC", single.step=F, plot.paths=T, Nboot=200)
 }
 ```
 
@@ -1961,36 +1929,43 @@ of course, impacts the resulting prediction error. Now we evaluate models accord
 produce distant and/or explosive predictions.
 
 ```{r}
-se_factor <- 4
-model_cols_mse <- cbind(model_cols, rss=rep(0, 12), MSE_naive=rep(0, 12), MSE_mc=rep(0, 12), MSE_boot=rep(0, 12), divergence=rep("", 12), stringsAsFactors=F)
+Nb = 100
+se_factor <- 4; se_factor_multi <- 8;
+model_cols_mse <- cbind(model_cols, sigmaSq=rep(0, 12), 
+                        MSE_1step=rep(0, 12), div=rep("", 12), 
+                        MSE_MC=rep(0, 12), div=rep("", 12),
+                        MSE_boot=rep(0, 12), div=rep("",12), stringsAsFactors=F)
 for (i in 1:12) {
-  #i <- 1
+  # i <- 4
   model <- models[[ orders[i] ]];
   # prediction errors have to be computed again since passing model to predictSETAR_andPlot does not
   # pass reference, only a copy
   predict1_naive <- PredictSETAR(model, x_train, x_eval, single.step=T, type="naive", return.paths=F)
-  predict1_mc <- PredictSETAR(model, x_train, x_eval, single.step=T, type="MC", return.paths=F)
-  predict1_boot <- PredictSETAR(model, x_train, x_eval, single.step=T, type="bootstrap", return.paths=F)
-  model$mse_naive <- predict1_naive$MSE; model$mse_mc <- predict1_mc$MSE; model$mse_boot <- predict1_boot$MSE
+  predict_mc <- PredictSETAR(model, x_train, x_eval, single.step=F, type="MC", return.paths=F, Nboot=Nb)
+  predict_boot <- PredictSETAR(model, x_train, x_eval, single.step=F, type="bootstrap", return.paths=F, Nboot=Nb)
+  model$mse_naive <- predict1_naive$MSE; model$mse_mc <- predict_mc$MSE; model$mse_boot <- predict_boot$MSE
   
   divergent1 <- se_factor * model$resSigmaSq < predict1_naive$MSE
-  divergent2 <- se_factor * model$resSigmaSq < predict1_mc$MSE
-  divergent3 <- se_factor * model$resSigmaSq < predict1_boot$MSE
-  div <- paste(ifelse(divergent1, "!",""), ifelse(divergent2, "!",""), ifelse(divergent3, "!",""))
+  divergent2 <- se_factor_multi * predict1_naive$MSE < predict_mc$MSE
+  divergent3 <- se_factor_multi * predict1_naive$MSE < predict_boot$MSE
   
   model_cols_mse[i, 3] <- round(model$resSigmaSq, digits=4); # fill in rss
   model_cols_mse[i, 4] <- round(predict1_naive$MSE, digits=4);
-  model_cols_mse[i, 5] <- round(predict1_mc$MSE, digits=4);
-  model_cols_mse[i, 6] <- round(predict1_boot$MSE, digits=4);
-  model_cols_mse[i, 7] <- div
+  model_cols_mse[i, 5] <- ifelse(divergent1, "~","");
+  model_cols_mse[i, 6] <- round(predict_mc$MSE, digits=4);
+  model_cols_mse[i, 7] <- ifelse(divergent2, "~","");
+  model_cols_mse[i, 8] <- round(predict_boot$MSE, digits=4);
+  model_cols_mse[i, 9] <- ifelse(divergent3, "~",""); 
 }
+names(model_cols_mse) <- c("model", "BIC", "sigmaSq", "MSE(1-step)","","MSE(MC)","","MSE(boot)","")
 model_cols_mse
 ```
 
-We notice that models that quickly diverge have significantly higher $MSE$ than their $\hat\sigma_{\varepsilon}^2$ (`RSS / (n - k)`). 
+We notice that models that quickly diverge have a significantly higher $MSE$ than their $\hat\sigma_{\varepsilon}^2$ (`RSS / (n - k)`). 
 One could then formulate a condition that model is "too divergent" if its training data $MSE$ (`RSS / (n - k)`) is significantly lower 
 than prediction $MSE$. The significance factor could be taken, for example, as `r se_factor`, i.e.: if the prediction $MSE$ exceeds `r se_factor`-multiple 
-of training data `RSS / (n - k)`, the prediction diverges. In the above table, we mark divergent predictions with `!`.
+of training data `RSS / (n - k)`, the prediction diverges. In the above table, we mark divergent predictions with `"~"`. When examining multi-step predictions
+we take a factor of `r se_factor_multi` of 1-step $MSE$.
 
 ### 5.5 Conclusion and SETAR Evaluation
 
@@ -2006,24 +1981,26 @@ With regards to their predictive properties, we pick the best models according t
 
 ```{r}
 cat("Models sorted by 1-step naive MSE:\n")
-non_divergent <- model_cols_mse[which( sapply(1:12, function(i) nchar(gsub(" ", "", model_cols_mse[i, 7])) == 0) ), ]
+non_divergent <- model_cols_mse[which( sapply(1:12, function(i) nchar(gsub(" ", "", model_cols_mse[i, 5])) == 0) ), ]
 mse_naive_orders <- order(non_divergent[, 4])
 mse_naive_cols <- non_divergent[mse_naive_orders, ]
 mse_naive_cols[, 1:4]
 ```
 
 ```{r}
-cat("Models sorted by 1-step Monte Carlo MSE:\n")
-mse_mc_orders <- order(non_divergent[, 5])
+cat("Models sorted by Monte Carlo MSE:\n")
+non_divergent <- model_cols_mse[which( sapply(1:12, function(i) nchar(gsub(" ", "", model_cols_mse[i, 7])) == 0) ), ]
+mse_mc_orders <- order(non_divergent[, 6])
 mse_mc_cols <- non_divergent[mse_mc_orders, ]
-cbind(mse_mc_cols[, 1:3], MSE_mc=mse_mc_cols[, 5])
+cbind(mse_mc_cols[, 1:3], MSE_mc=mse_mc_cols[, 6])
 ```
 
 ```{r}
-cat("Models sorted by 1-step Bootstrap MSE:\n")
-mse_boot_orders <- order(non_divergent[, 6])
+cat("Models sorted by Bootstrap MSE:\n")
+non_divergent <- model_cols_mse[which( sapply(1:12, function(i) nchar(gsub(" ", "", model_cols_mse[i, 9])) == 0) ), ]
+mse_boot_orders <- order(non_divergent[, 8])
 mse_boot_cols <- non_divergent[mse_mc_orders, ]
-cbind(mse_boot_cols[, 1:3], MSE_boot=mse_boot_cols[, 6])
+cbind(mse_boot_cols[, 1:3], MSE_boot=mse_boot_cols[, 8])
 ```
 
 and as we observe, the order of the first 4 models remains the same regardless of the prediction method.
@@ -2204,31 +2181,6 @@ Yt <- function(x, t, p) c(1, x[(t-1):(t-p)])
 Yt(xt, t=3, p=2)
 ```
 
-```{r}
-# install.packages("Rcpp")
-# install.packages("devtools")
-# install.packages("Rcpp",type='source')
-# library(Rcpp)
-# library(devtools)
-# find_rtools()
-# require(Rcpp)
-# 
-# cppFunction('double SmoothTransitionC(double x, double c, double gamma, String type) {  
-#   if (type == "logistic") {    
-#    return 1 / (1 + exp(-gamma * (x - c)));  
-#   } 
-#   else 
-#     if (type == "exponential") {
-#       return 1 - exp(-gamma * pow((x - c), 2));  
-#     } 
-#     else {    
-#       return 0;  
-#     } 
-# }')        
-
-#SmoothTransitionC(x = 1.2, c = 1.5, gamma = 10.0, type = "logistic")
-```
-
 #### $m$-Regime Basis
 
 ```{r mregBasisDef, echo=T}
@@ -2270,6 +2222,14 @@ IC(n=length(xt), p=2, sigmaSq=0.027, m=3)
 
 #### Parameter Estimation
 
+<!-- $$\begin{equation*} -->
+<!-- \mathbf{}\left[\begin{matrix} -->
+<!-- 2 & -5 & 4\\ 1 & -2.5 & 1\\ 1 & -4 & 6 -->
+<!-- \end{matrix}\right]  -->
+<!-- \end{equation*} -->
+<!-- $$ -->
+
+
 ```{r}
 # test for packages
 suppressMessages(pkgTest("zeallot"))
@@ -2278,72 +2238,119 @@ suppressMessages(pkgTest("matlib"))
 
 ```{r stdErrEstim, echo=T}
 
-Phi <- model$PhiParams
-x <- xt; 
-p <- model$p
-d <- model$d
-res <- model$residuals
-gamma <- model$gamma
-type <- "logistic"
-
 # estimate standard errors of STAR parms: (Phi, gamma, c)
-gradient_CovMatrix <- function(x, p, d, res, Phi, gamma, c, z=x, m=2, type=c("logistic", "exponential")) {
+starParamCovMatrix <- function(x, p, d, res, Phi, gamma, c, z=x, m=2, type=c("logistic", "exponential")) {
   type <- match.arg(type)
-  n <- length(x); k <- max(p, d); times <- (k + 1):n;
-  G <- sapply(times, function(t) SmoothTransition(z[t - d], c, gamma, type))
+  n <- length(x); k <- p; times <- (k + 1):n;
+  
   Phi <- matrix(Phi, nrow=m, byrow=T)
   # transition derivatives
-  dG_dgamma <- numeric(); dG_dc <- numeric(); d2G_dgamma2 <- numeric(); 
-  d2G_dc2 <- numeric(); d2G_gammadc <- numeric();
-  
+  # === the following arrays are (m - 1)x(n - k) matrices ====
+  G <- sapply(times, function(t) SmoothTransition(z[t - d], c, gamma, type))
   if (type == "exponential") {
-    dG_dgamma <- sapply(times, function(t) exp(-gamma * (c - z[t - d])^2) * (c - z[t - d])^2 )
+    dG_dgamma <- sapply(times, function(t) exp(-gamma * (c - z[t - d])^2) * (c - z[t - d])^2)
   } else {
     dG_dgamma <- sapply(times, function(t) exp(gamma * (z[t - d] - c)) * (z[t - d] - c) /
-                          (1 + exp(gamma * (z[t - d] - c)))^2 )
+                          (1 + exp(gamma * (z[t - d] - c)))^2)
   }
   if (type == "exponential") {
-    dG_dc <- sapply(times, function(t) 2 * gamma * (c - z[t - d]) * exp(-gamma * (c - z[t - d])^2) )
+    dG_dc <- sapply(times, function(t) 2 * gamma * (c - z[t - d]) * exp(-gamma * (c - z[t - d])^2))
   } else {
     dG_dc <- sapply(times, function(t) -gamma * exp(gamma * (z[t - d] + c)) / 
-                      (exp(c * gamma) + exp(gamma * z[t - d]))^2 )
+                      (exp(c * gamma) + exp(gamma * z[t - d]))^2)
   }
   if (type == "exponential") {
-    d2G_dgamma2 <- sapply(times, function(t) -exp(-gamma * (c - z[t - d])^2) * (c - z[t - d])^4 )
+    d2G_dgamma2 <- sapply(times, function(t) -exp(-gamma * (c - z[t - d])^2) * (c - z[t - d])^4)
   } else {
     d2G_dgamma2 <- sapply(times, function(t) exp(gamma * (c + z[t - d])) * (c - z[t - d])^2 * 
-              (exp(c * gamma) - exp(z[t - d] * gamma)) / (exp(c * gamma) + exp(z[t - d] * gamma))^3 )
+              (exp(c * gamma) - exp(z[t - d] * gamma)) / (exp(c * gamma) + exp(z[t - d] * gamma))^3)
   }
   if (type == "exponential") {
     d2G_dc2 <- sapply(times, function(t) -2 * gamma * exp(-gamma * (c - z[t - d])^2) *
-              (-1 + 2 * c^2 * gamma - 4 * c * z[t - d] * gamma + 2 * z[t - d]^2 * gamma) )
+              (-1 + 2 * c^2 * gamma - 4 * c * z[t - d] * gamma + 2 * z[t - d]^2 * gamma))
   } else {
     d2G_dc2 <- sapply(times, function(t) gamma^2 * exp(gamma * (c + z[t - d])) *
                         (exp(c * gamma) - exp(z[t - d] * gamma)) /
-              (exp(c * gamma) + exp(z[t - d] * gamma))^3 )
+              (exp(c * gamma) + exp(z[t - d] * gamma))^3)
   }
   if (type == "exponential") {
     d2G_dgammadc <- sapply(times, function(t) -2 * exp(-gamma * (c - z[t - d])^2) * (c - z[t - d]) *
-              (-1 + c^2 * gamma - 2 * c * z[t - d] * gamma + z[t - d]^2 * gamma) )
+              (-1 + c^2 * gamma - 2 * c * z[t - d] * gamma + z[t - d]^2 * gamma))
   } else {
     d2G_dgammadc <- sapply(times, function(t) -exp(gamma * (z[t - d] - c)) * 
               (1 - c * gamma + z[t - d] * gamma + exp(gamma * (z[t - d] - c)) * (1 + c * gamma - z[t - d] * gamma)) /
-              (1 + exp(gamma * (z[t - d] - c)))^3 )
+              (1 + exp(gamma * (z[t - d] - c)))^3)
   }
-  # skeleton gradient and Hessian
+  # convert results to (m-1)x(n-k) matrices
+  dG_dgamma <- matrix(dG_dgamma, nrow=(m-1), ncol=(n-k));
+  dG_dc <- matrix(dG_dc, nrow=(m-1), ncol=(n-k));
+  d2G_dgamma2 <- matrix(d2G_dgamma2, nrow=(m-1), ncol=(n-k));
+  d2G_dc2 <- matrix(d2G_dc2, nrow=(m-1), ncol=(n-k));
+  d2G_dgammadc <- matrix(d2G_dgammadc, nrow=(m-1), ncol=(n-k));
+  # dimension of the parameter vector
+  dim_par = m*(p + 1) + 2*(m - 1) 
+  
+  # (p + 1)x(n - k)
   Y <- sapply(times, function(t) Yt(x, t, p))
-  skelGrad <- c(
-    Y %*% (1 - G), Y %*% G, 
-    as.numeric(sapply(2:m, function(j) (Phi[j,] - Phi[j - 1,]))) %*% Y %*% dG_dgamma,
-    as.numeric(sapply(2:m, function(j) (Phi[j,] - Phi[j - 1,]))) %*% Y %*% dG_dc
-  )
+  Ym <- do.call(rbind, replicate(m, Y,simplify=F))
+  Gt <- rbind(rep(1, (n - k)), G)
+  Gm <- rbind(Gt, rep(0, (n - k)))
+  Gm <- matrix(sapply(1:m, function(j) replicate(p+1, Gm[j,] - Gm[j + 1,])), nrow=m*(p+1), byrow=T)
+  Phim <- (Phi - rbind(rep(0, (p + 1)), Phi[1:(m-1),]))
+  Phi_m <- Phim[2:m,]
+  
+  # skeleton gradients and Hessians
+  skelGrad <- rbind(Gm * Ym, Phi_m %*% Y * dG_dgamma, Phi_m %*% Y * dG_dc)
+  
+  # d2Skel_dPhi2
   zeros <- matrix(0, nrow=m*(p + 1), ncol=m*(p + 1))
-  PhiSquareMat <- matrix(c(-Y %*% dG_dgamma, -Y %*% dG_dc), nrow=m*(p + 1), ncol=m)
-  skelHess <- c(
-    matrix(0, nrow=(p + 1), ncol=m*(p + 1), byrow=T), -Y %*% dG_dgamma, -Y %*% dG_dc,
-    
+  # (m*(p + 1))x(2*(m - 1))
+  PhiSigns <- sapply(1:(m - 1), function(k) 
+    sapply(1:m, function(j) {
+      if(k == j) return(rep(-1, p + 1)) else if(j - 1 == k) return(rep(1, p + 1)) else return(rep(0, p + 1))
+  }))
+  PhiSigns <- cbind(PhiSigns, PhiSigns)
+  PhiCornerMatrices <- lapply(1:(n - k), function(t) PhiSigns * cbind(
+    matrix(rep(dG_dgamma[,t], m*(p + 1)), ncol=(m-1), byrow=T),
+    matrix(rep(dG_dc[,t], m*(p + 1)), ncol=(m-1), byrow=T)
+  ))
+  PhiDiagMatrices <- lapply(1:(n - k), function(t) rbind(
+    cbind( diag(d2G_dgamma2[,t], nrow=(m-1), ncol=(m-1)), diag(d2G_dgammadc[,t], nrow=(m-1), ncol=(m-1)) ),
+    cbind( diag(d2G_dgammadc[,t], nrow=(m-1), ncol=(m-1)), diag(d2G_dc2[,t], nrow=(m-1), ncol=(m-1)) )
+  ))
+  skelHessians <- lapply(1:(n - k), function(t) rbind(
+    cbind(zeros, PhiCornerMatrices[[t]]) * Ym[,t],
+    cbind(t(PhiCornerMatrices[[t]]) * Ym[,t], 
+          PhiDiagMatrices[[t]] * 
+            do.call(cbind, 
+              replicate(2, do.call(rbind, replicate(2, 
+                diag(as.numeric(Phi_m %*% Y[,t]), nrow=m-1,ncol=m-1),
+            simplify=F)),simplify=F))
+    )
+  ))
+  rssHessians <- lapply(1:(n - k), function(t) 
+    2 * (sapply(1:dim_par, function(i) sapply(1:dim_par, function(j) 
+      skelGrad[i, t] * skelGrad[j, t])) -  res[t,] * skelHessians[[t]])
   )
+  MeanHessian <- Reduce('+', rssHessians) / (n - k)
+  rssGrads <- lapply(1:(n - k), function(t) skelGrad[,t] %*% t(skelGrad[,t]))
+  MeanInfMatrix <- Reduce('+', rssGrads) / (n - k)
+  invMeanHessian <- inv(MeanHessian)
+  # parameter covariance matrix estimate
+  invMeanHessian %*% MeanInfMatrix %*% invMeanHessian / n
 }
+
+# 2 regimes
+model <- EstimSTAR_m(xt, p=2, d=2, c=0.1, gamma=10)
+Phi = model$PhiParams
+res = model$residuals
+starParamCovMatrix(xt, p=2, d=2, res, Phi, c=0.1, gamma=10)
+
+# 3 regimes
+model <- EstimSTAR_m(xt, p=2, d=2, c=c(0.1,0.2), gamma=c(10,11), m=3)
+Phi = model$PhiParams
+res = model$residuals
+starParamCovMatrix(xt, p=2, d=2, res, Phi, c=c(0.1,0.2), gamma=c(10,11), m=3)
 ```
 
 ```{r mEstimSTARDef, echo=T}
