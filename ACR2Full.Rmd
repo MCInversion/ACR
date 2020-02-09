@@ -487,7 +487,7 @@ xmax <- 0.5; xmin <- -0.2;
 n <- length(xt)
 simPlotMax <- 3 * n
 par(mfrow=c(1,2))
-for (i in 1:3) {
+for (i in 1:12) {
   equilib_sims <- list()
   equilibria <- list()
   p <- models[[orders[i] ]]$p; d <- models[[orders[i] ]]$d; c <- models[[orders[i] ]]$c;
@@ -2599,6 +2599,8 @@ BICs_s <- sapply(models_s, function(m) m$BIC)
 orders_s <- order(BICs_s)
 models_s_Out <- models_s_columns[orders_s,]
 head(models_s_Out, n=12)
+
+nSTARs = min(12, nrow(models_s_Out)) # count in case there's less than 12
 ```
 
 Again, we sorted the models by their $BIC$. We seem to have a rather small sample, but that is most likely due to only having `r length(hypars)` 
@@ -2623,8 +2625,135 @@ models_s_CoeffErrors
 
 ### 6.4 Visualisation
 
+We can now visualize the results of the top 3 models:
+
+```{r STARTop3Plot, fig.width=9, fig.height=3.6}
+plotNmax <- 75; plotRange <- 1.2 * c(min(xt), max(xt));
+par(mfrow=c(1,2))
+for (i in 1:3) {
+  model <- models_s[[orders_s[i]]]
+  StarFit <- xt - append(matrix(0., ncol=model$p), model$residuals)
+  m <- length(model$residuals)
+
+  plot(x=dat$time[1:plotNmax], y=xt[1:plotNmax],
+       main=model$name, xlab="year", ylab="%", ylim=plotRange)
+  lines(x=dat$time[1:plotNmax], y=StarFit[1:plotNmax], col="blue",lwd=2)
+  legend("topleft", legend=c("fitted STAR"), col=c("blue"), lty=1, lwd=2, cex=0.8)
+  
+  plot(x=dat$time[1:plotNmax], y=model$residuals[1:plotNmax], type="l", 
+       main=paste0(model$name," Residuals"),
+       xlab="year", ylab="%", ylim=plotRange)
+}
+```
+
+### 6.5 Deterministic Properties
+
+Naturally, it is just as useful to understand the deterministic evolution of the model, as it is in the case of SETAR models from section 2.4.
+
+```{r starEquilibria, fig.width=10, fig.height=3}
+nEquilPlot <- 6
+xmax <- 0.6; xmin <- -0.6;
+n <- length(xt)
+simPlotMax <- 3 * n
+par(mfrow=c(1,2))
+for (i in 1:nSTARs) {
+  equilib_sims <- list()
+  equilibria <- list()
+  model <- models_s[[ orders_s[i] ]];
+  p <- model$p; d <- model$d;
+  c <- model$c; gamma <- model$gamma;
+  sigmaSq <- model$resSigmaSq
+  k <- max(p, d)
+  n_offsets <- 20
+  for (j in 0:n_offsets) {
+    x0 <- (xmax - xmin) / n_offsets * j + xmin
+    equilib_sim <- array()
+    equilib_sim[1] <- x0
+    for (t in 2:simPlotMax) {
+      if (t < (k + 1)) {
+        equilib_sim[t] <- equilib_sim[t - 1]
+      } else {
+        equilib_sim[t] <- skelSTAR_m(equilib_sim, t, p, d, c, gamma, model$PhiParams)
+      }
+    }
+    
+    equilibrium_rounded <- round(equilib_sim[simPlotMax], digits=4)
+    equilibria[[paste(equilibrium_rounded)]] <- equilibrium_rounded
+    equilib_sims[[j + 1]] <- equilib_sim
+    
+    if (i <= nEquilPlot) {
+      if (j < 1) {
+        plot(x=1:simPlotMax, y=equilib_sim, type="l", col="gray", 
+             xlim=c(1, n / 3), ylim=c(1.1 * xmin, 1.1 * xmax), 
+             main=model$name,
+             xlab="t", ylab="%")
+      } else {
+        lines(x=1:simPlotMax, y=equilib_sim, col="gray")
+      }
+    }
+  }
+  if (i <= nEquilPlot) {
+    for (j in 0:n_offsets) {
+      epsilon <- (xmax - xmin) * 0.025
+      x0 <- c + (n_offsets / 2 - j) * epsilon #small initial perturbations from the threshold value
+      equilib_sim <- array()
+      equilib_sim[1] <- x0
+      for (t in 2:simPlotMax) {
+        if (t < (k + 1)) {
+          equilib_sim[t] <- equilib_sim[t - 1]
+        } else {
+          equilib_sim[t] <- skelSTAR_m(equilib_sim, t, p, d, c, gamma, model$PhiParams)
+        }
+      }
+      equilib_sims[[j + 1]] <- equilib_sim
+      lines(x=1:simPlotMax, y=equilib_sim, lwd=2)
+      lines(x=c(1, simPlotMax), y=c(c, c), col="green", lty="dashed", lwd=2)
+    }
+  }
+  models_s[[ orders_s[i] ]]$equilibria <- as.numeric(equilibria)
+}
+
+cat("model equilibria: \n")
+models_s_Equilibria <- sapply(1:nSTARs, function(i) models_s[[ orders_s[i] ]]$equilibria)
+names(models_s_Equilibria) <- sapply(1:nSTARs, function(i) models_s[[ orders_s[i] ]]$name)
+models_s_Equilibria
+```
+
+### 6.6 Conclusion
+
+The STAR models, selected in this chapter were sampled by the results of nonlinearity tests. Here we see them ordered by their $BIC$:
+
+```{r}
+res <- data.frame(names(models_s_Equilibria))
+names(res) <- c("STAR2 search results:")
+res
+```
+
+Besides an $LSTAR$ exclusivity in the selected sample, we notice that the upper bound of the $\gamma$ parameter (`gamma = 10`) seems to be selected, 
+which might suggest a preference for a steep transition between regimes.
+
+## 7 STAR Model Diagnostics, STAR3, and Predictions
+
+In this chapter we conclude the $STAR$ evaluation of our data by testing for remaining $STAR$-3 nonlinearity, and follow by performing forecasts
+on the resulting models. Fortunately, we have prepared a set of general methods for $m$-regimes, which means that we only need to change the default regime count
+to `m = 3` when estimating additional models.
+
+### 7.1 Autocorrelation of Residuals
 
 
 
+### 7.2 Remaining STAR Nonlinearity
+
+### 7.3 Estimating 3-regime STAR Models
+
+### 7.4 Visualisation
+
+### 7.5 Predictions
+
+### 7.6 Conclusion
 
 
+
+## 8 Markov-Switching Models
+
+## 9 Artificial Neural Networks
