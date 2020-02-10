@@ -2795,7 +2795,8 @@ LMtest_STAR2autocorr <- function(x, d, c, gamma, par, type=c("logistic","exponen
 }
 ```
 ```{r star2autocorrTest, echo=T}
-LMtest_STAR2autocorr(xt, d=2, c=0.131, gamma=10, par=c(-0.02606206, 0.3141173, 0.3861456, 0.1340813, 1.1096505, -0.5167062), pmax=9)
+LMtest_STAR2autocorr(xt, d=2, c=0.131, gamma=10, 
+    par=c(-0.02606206, 0.3141173, 0.3861456, 0.1340813, 1.1096505, -0.5167062), pmax=9)
 ```
 Under the assuption of the null hypothesis, the test statistic $LM$ is asymptotically $\chi^2(q)$-distributed, which means that we reject
 the null hypothesis on $\alpha \cdot 100 \%$ significance level if `p-value` $< \alpha / q$.
@@ -2854,7 +2855,8 @@ LMtest_STAR3nonLin <- function(x, d, c, gamma, par, type=c("logistic","exponenti
   c(LM=LM, CV=qchisq(1 - alpha, df=df), p_value=1-pchisq(LM, df=df), alpha_corrected=alpha/df)
 }
 
-LMtest_STAR3nonLin(xt, d=2, c=0.131, gamma=10, par=c(-0.02606206, 0.3141173, 0.3861456, 0.1340813, 1.1096505, -0.5167062), pmax=13)
+LMtest_STAR3nonLin(xt, d=2, c=0.131, gamma=10,
+ par=c(-0.02606206, 0.3141173, 0.3861456, 0.1340813, 1.1096505, -0.5167062), pmax=13)
 ```
 Again, the $LM$ statistic is asymptotically $\chi^2(3p)$-distributed if the null hypothesis is true for an LSTAR nonlinearity ($\chi^2(2p)$-distributed for ESTAR), so we compare the p-value 
 with a corrected $\alpha$.
@@ -3419,6 +3421,417 @@ when compared to ordering by BIC. This implies that test data fit accuracy of ch
 
 ## 8 Markov-Switching Models
 
+### 8.1 Methods
 
+We begin by suplying a dummy fitted linear model to the `msmFit` function:
+
+```{r}
+suppressMessages(pkgTest("magrittr"))
+suppressMessages(pkgTest("MSwM"))
+xt <- x_train
+# k is nReg
+summary( msmFit(lm(y ~ 1, data.frame(y = xt)), k=2, p=1, sw=rep(T, 1 + 2)) )
+```
+
+Then we do this for the following orders $p$:
+
+```{r}
+bicMSW <- function(x, p, nreg) {
+  aic2 <- c();  bic2 <- c();
+  aic3 <- c();  bic3 <- c();
+  
+  fitLin <- lm(y ~ 1, data.frame(y = xt))
+  # 2-reg models
+  k <- nreg[1]; tmp <- c()
+  cat("2-reg:")
+  cat("   p = ")
+  for(i in p) {
+    cat(i, " ")
+    fitmsm <- try( msmFit(fitLin, k = k, p = i, sw = rep(T, i + 2)), silent=T)
+    if (class(fitmsm) != "try-error") {
+      swi <- fitmsm@switch[-length(fitmsm@switch)]
+      np <- fitmsm["k"] * sum(swi) + sum(!swi)
+      
+      # IC
+      aic2 <- c(aic2, 2 * fitmsm["Fit"]["logLikel"] + 2 * np)
+      bic2 <- c(bic2, 2 * fitmsm["Fit"]["logLikel"] + 2 * np * log(nrow(fitmsm@model$model)) )
+    }
+  }
+  
+  # 3-reg models
+  k <- nreg[2]
+  cat("3-reg:")
+  cat("   p = ")
+  for(i in p) {
+    cat (i, " ")
+    fitmsm <- try( msmFit(fitLin, k = k, p = i, sw = c(rep(T, i + 1), F)), silent=T)
+    if (class(fitmsm) != "try-error") {
+      swi <- fitmsm@switch[-length(fitmsm@switch)]
+      np <- fitmsm["k"] * sum(swi) + sum(!swi)
+    
+      # IC
+      aic3 <- c(aic3, 2 * fitmsm["Fit"]["logLikel"] + 2 * np )
+      bic3 <- c(bic3, 2 * fitmsm["Fit"]["logLikel"] + 2 * np * log(nrow(fitmsm@model$model)) )
+    }
+  }
+  
+  results <- list()
+  results$p <- p
+  results$aic <- list("2" = aic2, "3" = aic3)
+  results$bic <- list("2" = bic2, "3" = bic3)
+  return(results)
+}
+
+pmax <- 12
+suppressWarnings( results <- bicMSW(xt, p=1:pmax, nreg=2:3) )
+```
+
+### 8.2 A 2-Regime MSW Model
+
+We will use the above procedure to pool the results in search of parameter $p$ minimizing $BIC$:
+
+```{r, fig.height=3, fig.width=6}
+par(mfrow=c(1,1))
+  plot(results$bic$`2`, type = "p", ylim = c(min(results$aic$`2`), max(results$bic$`2`)), main = "2-regime MSW\nInf crit", ylab = "IC", xlab = "p")
+  lines(results$aic$`2`, type = "p", col = "red")
+  legend("topleft", legend=c("BIC","AIC"), col=c("black","red"), pch=1, cex=0.8)
+
+
+p <- which.min(results$bic$`2`)
+```
+
+and save the result. We can easily access the fitted `msm` (regime-to-regime) transition probability matrix $\textbf{P}$ through a property `@transMat`
+
+```{r}
+suppressWarnings( fitmsm2 <- msmFit(lm(y ~ 1, data.frame(y = xt)), k=2, p=p, sw=rep(T, 1 + 2)) )
+cat("transProbMatrix = \n")
+round(fitmsm2@transMat, 4)
+```
+
+Another important result is the ergodic probability vector $\boldsymbol{\pi} = (\textbf{A}^{\top}\textbf{A})^{-1}\textbf{A}^{\top} \textbf{e}_{m+1}$ where $\textbf{A} = (\textbf{P}^{\top} - \textbf{I}_{m}, \boldsymbol{1}_m^{\top})^{\top}$ and $\boldsymbol{1}_m = (1,...,1)^{\top}$ with the $\textbf{e}_{m+1} = (\textbf{I}_{m+1})_{. \ , m+1}$ (column):
+
+```{r}
+cat("ergodicProbs = \n")
+M <-diag(fitmsm2@k) - fitmsm2@transMat
+A <- rbind(M, rep(1, fitmsm2@k))
+solve(t(A) %*% A) %*% t(A) %*% rbind(as.matrix(rep(0, fitmsm2@k)), 1)
+```
+
+On top of that, we can show the coefficient errors:
+
+```{r}
+cat("2-regime AR coeffs:\n")
+fitmsm2@Coef
+cat("sErrors:\n")
+fitmsm2@seCoef
+```
+
+Moreover, we can plot time components of filtered and smoothed probabilities for each regime:
+
+```{r, fig.height=4, fig.width=10}
+par(mfrow=c(1,1))
+par(mar=c(3.5,3.5,3.5,3.5))
+plotProb(fitmsm2, which = 1)
+```
+
+and also mark the portions of the time series, appearing in each regime, from the filtered probabilities
+
+```{r, fig.height=5, fig.width=12}
+par(mfrow=c(1,2))
+par(mar=c(3.5,3.5,3.5,3.5))
+plotProb(fitmsm2, which = 2)
+par(mar=c(3.5,3.5,3.5,3.5))
+plotProb(fitmsm2, which = 3)
+```
+
+### 8.3 A 3-regime MSW Model
+
+We show the same results as in the previous section:
+
+```{r, fig.height=3, fig.width=6}
+par(mfrow=c(1,1))
+  plot(results$bic$`3`, type = "p", ylim = c(min(results$aic$`3`), max(results$bic$`3`)), main = "3-regime MSW\nInf crit", ylab = "IC", xlab = "p")
+  lines(results$aic$`3`, type = "p", col = "red")
+  legend("topleft", legend=c("BIC","AIC"), col=c("black","red"), pch=1, cex=0.8)
+
+
+p <- which.min(results$bic$`3`)
+```
+In order to avoid singularity we choose $p=2$.
+```{r}
+suppressWarnings( fitmsm3 <- msmFit(lm(y ~ 1, data.frame(y = xt)), k=3, p=2, sw=c(rep(T, 2 + 1), F)) )
+cat("transProbMatrix = \n")
+round(fitmsm3@transMat, 4)
+
+cat("ergodicProbs = \n")
+M <-diag(fitmsm3@k) - fitmsm3@transMat
+A <- rbind(M, rep(1, fitmsm3@k))
+solve(t(A) %*% A) %*% t(A) %*% rbind(as.matrix(rep(0, fitmsm3@k)), 1)
+
+cat("3-regime AR coeffs:\n")
+fitmsm3@Coef
+cat("sErrors:\n")
+fitmsm3@seCoef
+```
+```{r, fig.height=8, fig.width=10}
+par(mar=c(3.5,3.5,3.5,3.5))
+plotProb(fitmsm3, which = 1)
+```
+```{r, fig.height=5, fig.width=12}
+par(mfrow=c(1,3))
+par(mar=c(3.5,3.5,3.5,3.5))
+plotProb(fitmsm3, which = 2)
+par(mar=c(3.5,3.5,3.5,3.5))
+plotProb(fitmsm3, which = 3)
+par(mar=c(3.5,3.5,3.5,3.5))
+plotProb(fitmsm3, which = 4)
+```
+
+### 8.4 Diagnostics
+
+The diagnostics of an MSW model rely either on the score function (i.e: gradient of the log-likelihood function: $\nabla_{\theta_{\Phi,\sigma_{\varepsilon}}}\log{f(X_t|\Omega_{t-1};\theta)}$) or
+take form of a Lagrange multiplier (LM) test. 
+
+For the sake of simplicity, we chose to analyze the models graphically, by observing their residuals from each regime's fitted values.
+
+2-Regime residuals:
+
+```{r, fig.height=4, fig.width=10}
+par(mfrow=c(1,2))
+plotDiag(fitmsm2, regime = 1, which = 1)
+plotDiag(fitmsm2, regime = 2, which = 1) 
+```
+And quantile-quantile plots:
+```{r, fig.height=4, fig.width=10}
+par(mfrow=c(1,3))
+plotDiag(fitmsm2, regime = 1, which = 2)
+plotDiag(fitmsm2, regime = 2, which = 2) 
+```
+In the first regime the closeness of the data to linearity suggests a uniform distribution of residuals, whereas for the second regime, 
+we observe a slight fluctuation in the quantile plot. This means that the second regime could possibly harbor remaining nonlinear behavior.
+This can be observed in the residual ACF:
+
+```{r, fig.height=5, fig.width=10}
+par(mfrow=c(1,1))
+par(mar=rep(4,4))
+plotDiag(fitmsm2, regime = 1, which = 3)
+par(mar=rep(4,4))
+plotDiag(fitmsm2, regime = 2, which = 3)
+```
+
+3-regime residuals:
+
+```{r, fig.height=4, fig.width=12}
+par(mfrow=c(1,3))
+plotDiag(fitmsm3, regime = 1, which = 1)
+plotDiag(fitmsm3, regime = 2, which = 1)
+plotDiag(fitmsm3, regime = 3, which = 1) 
+```
+
+3-regime quantile-quantile plots:
+
+```{r, fig.height=4, fig.width=10}
+par(mfrow=c(1,3))
+plotDiag(fitmsm3, regime = 1, which = 2)
+plotDiag(fitmsm3, regime = 2, which = 2) 
+plotDiag(fitmsm3, regime = 3, which = 2) 
+```
+3-regime square resid autocorrelations:
+```{r, fig.height=5, fig.width=10}
+par(mfrow=c(1,1))
+par(mar=rep(4,4))
+plotDiag(fitmsm3, regime = 1, which = 3)
+par(mar=rep(4,4))
+plotDiag(fitmsm3, regime = 2, which = 3)
+par(mar=rep(4,4))
+plotDiag(fitmsm3, regime = 3, which = 3)
+```
+Which suggests data might still contain some nonlinearity not covered by the second regime.
+
+### 8.5 Predictions
+
+```{r, fig.height=4, fig.width=10}  
+# 1-step predict
+matPredic2 <- fitmsm2@transMat %*% t(fitmsm2@Fit@filtProb)
+MSWPredic2 <- vector(length = length(1:length(x_eval)))
+
+for(t in 3:length(x_eval)){
+  valuePredic <- (t(fitmsm2@Coef)[1:2, 1] %*% 
+                    c(1, x_eval[(t - fitmsm2@p + 1):t])) * matPredic2[1] + 
+    (t(fitmsm2@Coef)[1:2, 2] %*% 
+       c(1, x_eval[(t - fitmsm2@p + 1):t])) * matPredic2[2]
+  
+  MSWPredic2[t - 2] <- valuePredic
+}
+
+par(mfrow=c(1,2))
+plot(x_eval, type = "b", main="MSW(2) 1-step prediction", xlab="t", ylab="x[%]")
+lines(MSWPredic2, type = "l", col = "dodgerblue3", lwd=2)
+
+matPredic3 <- fitmsm3@transMat %*% t(fitmsm3@Fit@filtProb)
+MSWPredic3 <- vector(length = length(1:length(x_eval)))
+
+for(t in 3:length(x_eval)){
+  valuePredic <- (t(fitmsm3@Coef)[1:3, 1] %*%
+                    c(1, x_eval[(t - fitmsm3@p + 1):t])) * matPredic3[1] +
+    (t(fitmsm3@Coef)[1:3, 2] %*%
+       c(1, x_eval[(t - fitmsm3@p + 1):t])) * matPredic3[2] +
+    (t(fitmsm3@Coef)[1:3, 3] %*%
+       c(1, x_eval[(t - fitmsm3@p + 1):t])) * matPredic3[3]
+  
+  MSWPredic3[t - 2] <- valuePredic
+}
+
+
+plot(x_eval, type = "b", main="MSW(3) 1-step prediction", xlab="t", ylab="x[%]")
+lines(MSWPredic3, type = "l", col = "dodgerblue3", lwd=2)
+```
+
+As we can observe, a 3-regime MSW proves to be less efficient in predicting the values of the evaluation part.
+
+### 8.6 Conclusion
+
+We can conclude that our use of MSW models from the `MSwM` package was purely experimental, mainly due to the fact that they fail to produce reliable 1-step predictions
+when compared to, for example, STAR models.
 
 ## 9 Artificial Neural Networks
+
+Popular in different applications of machine learning, the last type of models we will use are neural networks. Their popularity stems from the fact that they can
+approximate almost any nonlinear function with arbitrary precision. It is usually the case, that a neural network becomes a black box, trained to perform a certain
+task, oblivious to any possible internal dynamics that could be described for the data (like in the case of SETAR, STAR, and MSW's). 
+
+In this chapter, we will construct such models, perform diagnostics and predictions. On top of that we can visualize the nodes of the network.
+
+### 9.1 Estimation
+
+```{r}
+suppressMessages(pkgTest("forecast"))  
+
+set.seed(1000)
+( model_ann_auto <- nnetar(xt) )
+```
+
+The automatic detection in the `nnetar` method found the orders $(p,q)$ = `(2,2)`, where $q$ is the number of nodes.
+
+```{r, fig.height=4, fig.width=7}
+par(mfrow=c(1,1))
+sapply(1:10, function(x) sum(nnetar(xt, p=2, size=x)$residuals^2, na.rm = T)) %>% 
+  plot(xlab="q", ylab="RSS", type="b")
+
+#rss_q <- sapply(1:10, function(x) sum(nnetar(xt, p=2, size=x)$residuals^2, na.rm = T))
+#which.min(diff(rss_q))
+```
+
+Taking a look at the graph with plotted `RSS` of `nnetar` 's, the steepest drop in the value is observed at $q=2$ which corresponds
+to the result of an automatic search.
+
+```{r}
+( model_ann <- nnetar(xt, p=2, size=2) )
+```
+
+### 9.2 Diagnostics
+
+First, we plot the test sample fit:
+
+```{r, fig.height=4, fig.width=9}
+plot(xt, ylab="", main="In-sample fit", type="b", xlab="t")
+lines(model_ann$fitted, col=rgb(0,0,0.9,0.7), lwd=2)
+legend("bottomright", legend=c("data","ANN(2,2)"), lty=1, lwd=2, col=c(1,rgb(0,0,0.9,0.7)), pch=c(1,NA))
+```
+
+For demonstration purposes, we can plot a stochastic simulation of the model data:
+
+```{r, fig.height=4, fig.width=9}
+plot(dat$time[1:length(xt)], simulate(model_ann, nsim=length(xt)),type="l", lwd=2, col=rgb(0,0,0,0.7),
+     ylab="",xlab="time",main="Auto model simulation", ylim=c(-1,1))
+lines(simulate(model_ann, nsim=length(xt)) ~ dat$time[1:length(xt)],col=rgb(0.9,0.2,0.1,0.7), lwd=2)
+```
+
+```{r, fig.height=4, fig.width=9}
+plot(dat$time[1:length(xt)], lwd=2, col=rgb(0,0,0,0.7),
+     simulate(model_ann,nsim=length(xt),innov=replicate(length(xt),0)), main="determ. sim",type="l",ylab="",xlab="time")
+```
+
+We notice that the deterministic simulation of the chosen model seems to stabilize on an equilibrium of `~0.15`.
+
+### 9.3 Predictions
+
+```{r, fig.height=3.6, fig.width=9}
+fcast_ann <- forecast(model_ann, PI=TRUE, h=length(x_eval), npaths=100)
+plot(fcast_ann, main="Multistep ANN(2,2) forecast", lwd=2, col=rgb(0,0,0,0.7))
+lines(c(rep(NA, length(xt)-1), xt[length(xt)], x_eval), lwd=2, col=rgb(0,0,0,0.7))
+```
+
+```{r, fig.height=3.6, fig.width=9}
+fit_ann <- nnetar(c(xt, x_eval), model=model_ann)
+one_step_ann <- tail(fitted(fit_ann),length(x_eval))
+qLANN <- (one_step_ann + quantile(na.omit(model_ann$residuals), 0.1))
+qHANN <- (one_step_ann + quantile(na.omit(model_ann$residuals), 0.9))
+eval_time <- dat$time[length(xt):(length(xt) + length(x_eval))]
+
+plot(dat$time[1:(length(xt) + length(x_eval))], c(xt, x_eval), ylim=c(-1,1), type="l",ylab="time", xlab="",main="One-step ANN(2,2) forecast", lwd=2, col=rgb(0,0,0,0.7))
+lines(eval_time, c(xt[length(xt)], one_step_ann), lwd=2, col=rgb(0,0,0.99,0.7))
+polygon(x = c(eval_time, rev(eval_time)), y = c(c(xt[length(xt)], qLANN), rev(c(xt[length(xt)], qHANN))), col=adjustcolor("blue", alpha.f = 0.2),border = F)
+```
+
+### 9.4 Visualisation of a Neural Network
+
+```{r}
+suppressMessages(pkgTest("neuralnet"))
+test_ann <- {}
+test_ann$width <- tail(xt, length(xt)-2)
+test_ann$lag1 <- xt[2:(length(xt)-1)]
+test_ann$lag2 <- xt[1:(length(xt)-2)]
+NNtest <- neuralnet(width ~ lag1 + lag2, test_ann, hidden=2,linear.output = T)
+plot(NNtest, rep="best")
+```
+
+Transition function:
+
+```{r, fig.height=4, fig.width=7}
+suppressMessages(pkgTest("plot3D"))
+M <- mesh(x=seq(-1, 1, length.out=100), y=seq(-1, 1, length.out=100))
+
+G <- function(x){
+  out<-(1/(1+exp(-x)))
+}
+
+findZAuto<-function(x,y){
+  #1st hidden node
+  temp1<- 1 * NNtest$weights[[1]][[1]][1,1] + x * NNtest$weights[[1]][[1]][2,1] + y * NNtest$weights[[1]][[1]][3,1]
+  #2nd hidden node
+  temp2<- 1 * NNtest$weights[[1]][[1]][1,2] + x * NNtest$weights[[1]][[1]][2,2] + y * NNtest$weights[[1]][[1]][3,2]
+  #output
+  out<- 1 * NNtest$weights[[1]][[2]][[1]] + G(temp1) * NNtest$weights[[1]][[2]][[2]] + G(temp2) * NNtest$weights[[1]][[2]][[3]]
+}
+
+z <- with(M, findZAuto(x,y))
+contour(seq(-1, 1, length.out=100), seq(-1, 1, length.out=100), z, nlevels = 25)
+```
+
+## 10 Evaluation
+
+After covering four different classes of nonlinear models of stochastic processes, we proceed to compare the results by choosing the best candidates from each.
+There will be two criteria of choice, namely fit quality determined by residual variance $\sigma^2_{\varepsilon}$ and 1-step prediction MSE:
+
+```{r}
+SETAR2 <- model_cols_mse[1, 1:4]
+SETAR3 <- model_cols_mse[6, 1:4]
+STAR2 <- model_s_cols_mse[1, 1:4]
+STAR3 <- model_s_cols_mse[2, 1:4]
+MSW2 <- data.frame(cbind("MSW(2,1)", "NA", round(mean(fitmsm2@model$residuals^2),4), round(mean((x_eval - MSWPredic2)^2),4)))
+MSW3 <- data.frame(cbind("MSW(3,3)", "NA", round(mean(fitmsm3@model$residuals^2),4), round(mean((x_eval - MSWPredic3)^2),4)))
+ANN2 <- data.frame(cbind("ANN(2,2)", "NA", round(mean(na.omit(model_ann$residuals)^2),4), round(mean((x_eval - one_step_ann)^2),4)))
+cnames <- c("model", "BIC", "sigmaSq", "MSE(1-step)")
+names(MSW2) <- cnames; names(MSW3) <- cnames; names(ANN2) <- cnames
+# TABLE <- rbind(SETAR2, SETAR3, MSW2, MSW3, ANN2, stringsAsFactors=F)
+TABLE <- rbind(SETAR2, SETAR3, STAR2, STAR3, MSW2, MSW3, ANN2, stringsAsFactors=F)
+sigmaSqOrders <- order(TABLE[,3])
+cat("Models ordered by sigmaSq:\n")
+TABLE[sigmaSqOrders,]
+```
+```{r}
+mseOrders <- order(TABLE[,4])
+cat("Models ordered by prediction MSE:\n")
+TABLE[mseOrders,]
+```
