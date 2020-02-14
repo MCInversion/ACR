@@ -145,8 +145,9 @@ fit <- as.numeric(fitted( arima(xt, order=c(p, 0, 0)) ))
 fit <- fit[(p + 1):length(fit)]
 sigSq = mean(res^2)
 ```
+
 $$
-X_t = (`r coef[1]` \pm `r se[1]`) X_{t-1} + (`r coef[2]` \pm `r se[2]`) X_{t-2} + (`r coef[3]` \pm `r se[3]`) X_{t-3} + \varepsilon_t \ , \ \ \hat\sigma_{\varepsilon} = `r sigSq`
+X_t = (`r coef[1]` \pm `r se[1]`) X_{t-1} + (`r coef[2]` \pm `r se[2]`) X_{t-2} + (`r coef[3]` \pm `r se[3]`) X_{t-3} + \varepsilon_t \ , \ \ \hat{\sigma}_{\varepsilon} = `r sigSq`
 $$
 While testing the validity of our linear model, we can easily use an automatic search procedure `auto.arima()` from the `forecast` package:
 ```{r}
@@ -250,9 +251,9 @@ First, we define a, so called, "indicator function" which essentially returns a 
   
 $$
 I(z_t, c) = \begin{cases}
-       0 &\quad\text{if } z_t \leq c \\
-       1 &\quad\text{if } z_t > c \\
-     \end{cases}
+0 &\quad\text{if } z_t \leq c \\
+1 &\quad\text{if } z_t > c \\
+\end{cases}
 $$
 
 ```{r}
@@ -281,9 +282,9 @@ Xt <- function(x, t, p, d, c, z = x) {
 Then we need a deterministic skeleton of the model:
 $$
 F(z_t, \theta) = \begin{cases}
-       \phi_{1,0} + \phi_{1,1}X_{t-1} + ... + \phi_{1,p_1} X_{t-p_1} &\quad\text{if } z_t \leq c \\
-       \phi_{2,0} + \phi_{2,1}X_{t-1} + ... + \phi_{2,p_2} X_{t-p_2} &\quad\text{if } z_t > c \\
-     \end{cases}
+\phi_{1,0} + \phi_{1,1}X_{t-1} + ... + \phi_{1,p_1} X_{t-p_1} &\quad\text{if } z_t \leq c \\
+\phi_{2,0} + \phi_{2,1}X_{t-1} + ... + \phi_{2,p_2} X_{t-p_2} &\quad\text{if } z_t > c \\
+\end{cases}
 $$
 ```{r}
 SkeletonSETAR <- function(x, t, p, d, c, theta, z = x) theta %*% Xt(x, t, p, d, c, z)
@@ -293,7 +294,7 @@ and the last group of functions we need for the upcoming procedure are functions
 of a SETAR model:
 
 $$
-AIC_{SETAR} = \sum_{j=1}^{m}(n_j \log{\hat\sigma_{\varepsilon,j}} + 2 (p_j + 1)) \ , \quad BIC_{SETAR} = \sum_{j=1}^{m}(n_j \log{\hat\sigma_{\varepsilon,j}} + \log{n_j} (p_j + 1)) \ , \ m = 2
+AIC_{SETAR} = \sum_{j=1}^{m}(n_j \log{\hat{\sigma}_{\varepsilon,j}} + 2 (p_j + 1)) \ , \quad BIC_{SETAR} = \sum_{j=1}^{m}(n_j \log{\hat{\sigma}_{\varepsilon,j}} + \log{n_j} (p_j + 1)) \ , \ m = 2
 $$
 ```{r}
 # Akaike
@@ -367,7 +368,7 @@ EstimSETAR <- function(x, p, d, c) {
 ```
 After performing this procedure for multiple parameters, i.e.: searching the discrete parameter space, we 
 further process the model with minimum residual square sum. For that we'll use a postprocessing method, in which we determine the following model attributes:
-$n_1$, $n_2$ (regime data counts), $\hat\sigma_{\varepsilon,1}$, $\hat\sigma_{\varepsilon,2}$ (regime residual variances), and information criteria ($AIC$, $BIC$).
+$n_1$, $n_2$ (regime data counts), $\hat{\sigma}_{\varepsilon,1}$, $\hat{\sigma}_{\varepsilon,2}$ (regime residual variances), and information criteria ($AIC$, $BIC$).
 ```{r}
 EstimSETAR_postproc <- function(model) {
   x <- model$data; k <- max(model$p, model$d); c <- model$c; n <- model$n;
@@ -411,7 +412,7 @@ cmin <- as.numeric(quantile(xt, 0.075)); cmax <- as.numeric(quantile(xt, 0.925))
 h = (cmax - cmin) / 100 # determine the step by which c should be iterated
 ```
 $$
-p = `r paste0(1:pmax, collapse=",")` \ , \ d = 1,..., \ p \quad c = `r paste0(seq(cmin, cmax, h)[1:3], collapse=",")`...`r paste0(seq(cmin, cmax, h)[97:100], collapse=",")`
+p = `r paste0(1:pmax, collapse=",")` \ , \ d = 1,..., \ p \quad c = `r paste0(round(seq(cmin, cmax, h)[1:3],4), collapse=",")`...`r paste0(round(seq(cmin, cmax, h)[97:100],4), collapse=",")`
 $$
 After iterating through thresholds $c$, we pick the model with the lowest residual variance.
 ```{r}
@@ -471,6 +472,7 @@ modelCoeffErrors
 Note, that we intentionally set coefficients, whose standard errors exceed half of their estimated value, to zero. 
 
 We can now visualize the results of the top 3 models:
+
 ```{r SETARTop3Plot, fig.width=9, fig.height=3.6}
 plotNmax <- 75
 par(mfrow=c(1,2))
@@ -675,8 +677,9 @@ $$
 X_t = \begin{cases}
 (`r phi[2]` \pm `r se[2]`)X_{t-1} + (`r phi[3]` \pm `r se[3]`)X_{t-2} + \varepsilon_t &\quad\text{if } X_{t-`r d`} \leq `r c` \\
 (`r phi[4]` \pm `r se[4]`) + (`r phi[5]` \pm `r se[5]`)X_{t-1} + (`r phi[6]` \pm `r se[6]`)X_{t-2} + \varepsilon_t &\quad\text{if } X_{t-`r d`} > `r c` \\
-\end{cases} \quad \hat\sigma_{\varepsilon}^2 = `r ss` \ , \ \hat\sigma_{\varepsilon,1} = `r ss1` \ , \ \hat\sigma_{\varepsilon,2} = `r ss2`
+\end{cases}
 $$
+$\hat{\sigma}_{\varepsilon}^2 = `r ss` \ , \ \hat{\sigma}_{\varepsilon,1} = `r ss1` \ , \ \hat{\sigma}_{\varepsilon,2} = `r ss2`$
 
 --------------------------------------------------------------------------------------------------------------
 
@@ -1292,7 +1295,7 @@ h = (cmax - cmin) / 50 # determine the step by which c should be iterated
 Still, even after this alleviation, the search might be computationally demanding. To obtain our results within reasonable time
 we use `foreach` and `doParallel` packages to compute search through $c_1$ and $c_2$ thresholds, and then process the results. Similraly to section 2.3, we iterate through
 $$
-p = `r paste0(1:pmax, collapse=",")` \ , \ d = 1,..., \ p \ , \quad c_1, c_2 = `r paste0(seq(cmin, cmax, h)[1:3], collapse=",")`...`r paste0(seq(cmin, cmax, h)[97:100], collapse=",")`
+p = `r paste0(1:pmax, collapse=",")` \ , \ d = 1,..., \ p \ , \quad c_1, c_2 = `r paste0(round(seq(cmin, cmax, h)[1:3],4), collapse=",")`...`r paste0(round(seq(cmin, cmax, h)[47:50],4), collapse=",")`
 $$
 
 ```{r setar3Estim}
@@ -1446,8 +1449,8 @@ model_cols
 To illustrate the inner dynamics of at least two highest ranked SETAR3 models, we use their respective coefficients:
 ```{r}
 mod <- models[[ orders[3] ]]
-p <- mod$p; d <- mod$d; c <- round(mod$c, 4)
-phi <- round(mod$PhiParams, 4); se <- round(mod$PhiStErrors,4)
+p <- mod$p; d <- mod$d; c <- round(mod$c, 2)
+phi <- round(mod$PhiParams, 2); se <- round(mod$PhiStErrors,2)
 
 Phi <- matrix(phi, nrow=3, byrow=T); Se <- matrix(se, nrow=3, byrow=T);
 phi1 <- Phi[1,]; phi2 <- Phi[2,]; phi3 <- Phi[3,]
@@ -1473,18 +1476,18 @@ regStr3 <- getRegimeString(phi3, se3, p)
 
 $$
 X_t = \begin{cases}
-`r regStr1` + \varepsilon_t &\quad\text{if } X_{t-`r d`} \leq `r c[1]` \\
-`r regStr2` + \varepsilon_t &\quad\text{if }`r c[1]` < X_{t-`r d`} \leq `r c[2]` \\
-`r regStr3` + \varepsilon_t &\quad\text{if }`r X_{t-`r d`} > `r c[2]` \\
-\end{cases} \quad \hat\sigma_{\varepsilon}^2 = `r ss` 
+`r regStr1` + \varepsilon_t & \text{if } X_{t-`r d`} \leq `r c[1]` \\
+`r regStr2` + \varepsilon_t & \text{if } `r c[1]` < X_{t-`r d`} \leq `r c[2]` \\
+`r regStr3` + \varepsilon_t & \text{if } X_{t-`r d`} > `r c[2]` \\
+\end{cases} \\ \quad \hat{\sigma}_{\varepsilon}^2 = `r ss` 
 $$
 
-$\hat\sigma_{\varepsilon,1} = `r ss1` \ , \ \hat\sigma_{\varepsilon,2} = `r ss2`$
+$\hat{\sigma}_{\varepsilon,1} = `r ss1` \ , \ \hat{\sigma}_{\varepsilon,2} = `r ss2`$
 
 ```{r}
 mod <- models[[ orders[4] ]]
 p <- mod$p; d <- mod$d; c <- round(mod$c, 4)
-phi <- round(mod$PhiParams, 4); se <- round(mod$PhiStErrors,4)
+phi <- round(mod$PhiParams, 2); se <- round(mod$PhiStErrors,2)
 
 Phi <- matrix(phi, nrow=3, byrow=T); Se <- matrix(phi, nrow=3, byrow=T);
 phi1 <- Phi[1,]; phi2 <- Phi[2,]; phi3 <- Phi[3,]
@@ -1499,12 +1502,12 @@ regStr3 <- getRegimeString(phi3, se3, p)
 $$
 X_t = \begin{cases}
 `r regStr1` + \varepsilon_t &\quad\text{if } X_{t-`r d`} \leq `r c[1]` \\
-`r regStr2` + \varepsilon_t &\quad\text{if }`r c[1]` < X_{t-`r d`} \leq `r c[2]` \\
-`r regStr3` + \varepsilon_t &\quad\text{if }`r X_{t-`r d`} > `r c[2]`
-\end{cases} \quad \hat\sigma_{\varepsilon} = `r ss`
+`r regStr2` + \varepsilon_t &\quad\text{if } `r c[1]` < X_{t-`r d`} \leq `r c[2]` \\
+`r regStr3` + \varepsilon_t &\quad\text{if } X_{t-`r d`} > `r c[2]`
+\end{cases} \\ \quad \hat{\sigma}_{\varepsilon} = `r ss`
 $$
 
-$ \hat\sigma_{\varepsilon,1} = `r ss1` \ , \ \hat\sigma_{\varepsilon,2} = `r ss2`$
+$\hat{\sigma}_{\varepsilon,1} = `r ss1` \ , \ \hat{\sigma}_{\varepsilon,2} = `r ss2`$
 
 ## 5. Predictions via SETAR Models and Their Evaluation
 
@@ -1911,7 +1914,7 @@ names(model_cols_mse) <- c("model", "BIC", "sigmaSq", "MSE(1-step)","","MSE(MC)"
 model_cols_mse
 ```
 
-We notice that models that quickly diverge have a significantly higher $MSE$ than their $\hat\sigma_{\varepsilon}^2$ (`RSS / (n - k)`). 
+We notice that models that quickly diverge have a significantly higher $MSE$ than their $\hat{\sigma}_{\varepsilon}^2$ (`RSS / (n - k)`). 
 One could then formulate a condition that model is "too divergent" if its training data $MSE$ (`RSS / (n - k)`) is significantly lower 
 than prediction $MSE$. The significance factor could be taken, for example, as `r se_factor`, i.e.: if the prediction $MSE$ exceeds `r se_factor`-multiple 
 of training data `RSS / (n - k)`, the prediction diverges. In the above table, we mark divergent predictions with `"~"`. When examining multi-step predictions
@@ -2723,9 +2726,14 @@ regStr2 <- getRegimeString(phi2, se2, p)
 ```
 
 $$
-X_t = \\
+X_t = 
+\begin{matrix}
+\\
 (`r regStr1`) \ [1 - G_L(X_{t-`r d`}, `r c`, `r gamma`)] + \\ (`r regStr2`) \ G_L(X_{t-`r d`}, `r c`, `r gamma`) + \varepsilon_t
-\\ \quad \hat\sigma_{\varepsilon}^2 = `r ss`
+\\
+\end{matrix}
+\\
+\quad \hat{\sigma}_{\varepsilon}^2 = `r ss`
 $$
 
 Besides an $LSTAR$ exclusivity in the selected sample, we notice that the upper bound of the $\gamma$ parameter (`gamma = 10`) seems to be selected, 
@@ -2993,7 +3001,7 @@ for(o in orders_s3) {
                                        t(model$PhiStErrors))
   row.names(models_s3_CoeffErrors[[key]]) <- t(c("Phi", "stdError"))
 }
-models_s3_CoeffErrors
+models_s3_CoeffErrors[[1]]
 ```
 
 #### Visualisation
@@ -3092,12 +3100,14 @@ regStr3 <- getRegimeString(phi3, se3, p)
 ```
 
 $$
-X_t = \\
+X_t = \begin{matrix}
+\\
 (`r regStr1`) \ [1 - G_L(X_{t-`r d`}, `r c[1]`, `r gamma[1]`)] + \\ 
 (`r regStr2`) \ [G_L(X_{t-`r d`}, `r c[1]`, `r gamma[1]`) - G_L(X_{t-`r d`}, `r c[2]`, `r gamma[2]`)] + \\
 (`r regStr3`) \ G_L(X_{t-`r d`}, `r c[2]`, `r gamma[2]`) + \varepsilon_t
-\\ \quad \hat\sigma_{\varepsilon}^2 = `r ss`
+\end{matrix}
 $$
+$\hat{\sigma}_{\varepsilon}^2 = `r ss`$
 
 ### 7.5 Predictions
 
@@ -3740,7 +3750,7 @@ $$
 X_t = \begin{cases}
 `r regStr1` + \varepsilon_t &\quad \text{if } s_t = 1 \\
 `r regStr2` + \varepsilon_t &\quad \text{if } s_t = 2
-\end{cases} \\ \quad \hat\sigma_{\varepsilon, 1}^2 = `r ss1` \ , \ \hat\sigma_{\varepsilon, 2}^2 = `r ss2`
+\end{cases} \\ \quad \hat{\sigma}_{\varepsilon, 1}^2 = `r ss1` \ , \ \hat{\sigma}_{\varepsilon, 2}^2 = `r ss2`
 $$
 
 ```{r}
@@ -3763,8 +3773,9 @@ X_t = \begin{cases}
 `r regStr1` + \varepsilon_t &\quad \text{if } s_t = 1 \\
 `r regStr2` + \varepsilon_t &\quad \text{if } s_t = 2 \\
 `r regStr3` + \varepsilon_t &\quad \text{if } s_t = 3
-\end{cases} \\ \quad \hat\sigma_{\varepsilon, 1}^2 = `r ss1` \ , \ \hat\sigma_{\varepsilon, 2}^2 = `r ss2` \ , \ \hat\sigma_{\varepsilon, 3}^2 = `r ss3`
+\end{cases}
 $$
+$\hat{\sigma}_{\varepsilon, 1}^2 = `r ss1` \ , \ \hat{\sigma}_{\varepsilon, 2}^2 = `r ss2` \ , \ \hat{\sigma}_{\varepsilon, 3}^2 = `r ss3`$
 
 ## 9 Artificial Neural Networks
 
@@ -3857,14 +3868,16 @@ test_ann$lag2 <- xt[1:(length(xt)-2)]
 NNtest <- neuralnet(width ~ lag1 + lag2, test_ann, hidden=2,linear.output = T)
 plot(NNtest, rep="best")
 
-gamma10 = 2.15099; gamma11 = -6.55571; gamma12 = 1.64279;
-gamma20 = -1.09858; gamma21 = 9.94937; gamma22 = -0.58115;
+nnWghts <- NNtest$weights[[1]]
+
+gamma10 = round(nnWghts[[1]][1, 1], 4); gamma11 = round(nnWghts[[1]][2, 1], 4); gamma12 = round(nnWghts[[1]][3, 1], 4);
+gamma20 = round(nnWghts[[1]][1, 2], 4); gamma21 = round(nnWghts[[1]][2, 2], 4); gamma22 = round(nnWghts[[1]][3, 2], 4);
 
 X1 = -1; X2 = 1; # x-pts
-Y11 = -gamma10 / gamma12 - gamma11 / gamma12 / X1; Y12 = -gamma10 / gamma12 - gamma11 / gamma12 / X2; # line1 y-pts
-Y21 = -gamma20 / gamma22 - gamma21 / gamma22 / X1; Y22 = -gamma20 / gamma22 - gamma21 / gamma22 / X2; # line2 y-pts
+Y11 = -gamma10 / gamma12 - gamma11 / gamma12 * X1; Y12 = -gamma10 / gamma12 - gamma11 / gamma12 * X2; # line1 y-pts
+Y21 = -gamma20 / gamma22 - gamma21 / gamma22 * X1; Y22 = -gamma20 / gamma22 - gamma21 / gamma22 * X2; # line2 y-pts
 
-beta0 = 0.15821; beta1 = -1.00004; beta2 = 1.26277
+beta0 = round(nnWghts[[2]][1], 4); beta1 = round(nnWghts[[2]][2], 4); beta2 = round(nnWghts[[2]][3], 4)
 ```
 
 Skeleton of a neural network:
@@ -3905,12 +3918,16 @@ ann_sig2 = round(mean(model_ann$residuals^2),4)
 ```
 
 $$
-X_t = `r beta0` + `r beta1` G(\gamma_1^{\top} Y_t) + `r beta2` G(\gamma_2^{\top} Y_t) + \varepsilon_t \\
-\gamma_1 = (`r gamma01`, `r gamma11`, `r gamma21`)^{\top} \ , \ \gamma_2 = (`r gamma02`, `r gamma12`, `r gamma22`)^{\top} \\
-Y_t = (1, X_{t-1}, X_{t-2})^{\top} \ , \ G(x) = 1 /(1 + \text{e}^{-x}) \\
-\hat\sigma_{\varepsilon}^2 = `r ann_sig2`
+X_t = `r beta0` + `r beta1` G(\gamma_1^{\top} Y_t) + `r beta2` G(\gamma_2^{\top} Y_t) + \varepsilon_t
 $$
 
+$$
+\begin{matrix}
+\gamma_1 = (`r gamma10`, `r gamma11`, `r gamma21`)^{\top} \ , \ \gamma_2 = (`r gamma10`, `r gamma12`, `r gamma22`)^{\top} \\
+Y_t = (1, X_{t-1}, X_{t-2})^{\top} \ , \ G(x) = 1 /(1 + \text{e}^{-x}) \\
+\hat{\sigma}_{\varepsilon}^2 = `r ann_sig2`
+\end{matrix}
+$$
 
 ## 10 Evaluation
 
@@ -3954,20 +3971,21 @@ $$
 X_t = \begin{cases}
 (`r phi[2]` \pm `r se[2]`)X_{t-1} + (`r phi[3]` \pm `r se[3]`)X_{t-2} + \varepsilon_t &\quad\text{if } X_{t-`r d`} \leq `r c` \\
 (`r phi[4]` \pm `r se[4]`) + (`r phi[5]` \pm `r se[5]`)X_{t-1} + (`r phi[6]` \pm `r se[6]`)X_{t-2} + \varepsilon_t &\quad\text{if } X_{t-`r d`} > `r c` \\
-\end{cases} \quad \hat\sigma_{\varepsilon}^2 = `r ss` \ , \ \hat\sigma_{\varepsilon,1} = `r ss1` \ , \ \hat\sigma_{\varepsilon,2} = `r ss2`
+\end{cases}
 $$
+$\hat{\sigma}_{\varepsilon}^2 = `r ss` \ , \ \hat{\sigma}_{\varepsilon,1} = `r ss1` \ , \ \hat{\sigma}_{\varepsilon,2} = `r ss2`$
 
 $SETAR(5,3,0.008,0.403)$:
 
 ```{r}
 mod <- models[[ orders[6] ]]
-p <- mod$p; d <- mod$d; c <- round(mod$c, 4)
-phi <- round(mod$PhiParams, 4); se <- round(mod$PhiStErrors,4)
+p <- mod$p; d <- mod$d; c <- round(mod$c, 3)
+phi <- round(mod$PhiParams, 2); se <- round(mod$PhiStErrors,2)
 
 Phi <- matrix(phi, nrow=3, byrow=T); Se <- matrix(se, nrow=3, byrow=T);
 phi1 <- Phi[1,]; phi2 <- Phi[2,]; phi3 <- Phi[3,]
 se1 <- Se[1,]; se2 <- Se[2,]; se3 <- Se[3,]
-ss <- round(mod$resSigmaSq, 4); ss1 <- round(mod$regSigmaSq[1], 4); ss2 <- round(mod$regSigmaSq[2], 4); ss3 <- round(mod$regSigmaSq[3], 4)
+ss <- round(mod$resSigmaSq, 4); ss1 <- round(mod$regSigmaSq[1], 3); ss2 <- round(mod$regSigmaSq[2], 3); ss3 <- round(mod$regSigmaSq[3], 3)
 
 regStr1 <- getRegimeString(phi1, se1, p)
 regStr2 <- getRegimeString(phi2, se2, p)
@@ -3978,12 +3996,12 @@ regStr3 <- getRegimeString(phi3, se3, p)
 $$
 X_t = \begin{cases}
 `r regStr1` + \varepsilon_t &\quad\text{if } X_{t-`r d`} \leq `r c[1]` \\
-`r regStr2` + \varepsilon_t &\quad\text{if }`r c[1]` < X_{t-`r d`} \leq `r c[2]` \\
-`r regStr3` + \varepsilon_t &\quad\text{if }`r X_{t-`r d`} > `r c[2]`
-\end{cases} \quad \hat\sigma_{\varepsilon}^2 = `r ss`
+`r regStr2` + \varepsilon_t &\quad\text{if } `r c[1]` < X_{t-`r d`} \leq `r c[2]` \\
+`r regStr3` + \varepsilon_t &\quad\text{if } X_{t-`r d`} > `r c[2]`
+\end{cases} \\ \quad \hat{\sigma}_{\varepsilon}^2 = `r ss`
 $$
 
-$ \hat\sigma_{\varepsilon,1} = `r ss1` \ , \ \hat\sigma_{\varepsilon,2} = `r ss2`$
+$\hat{\sigma}_{\varepsilon,1} = `r ss1` \ , \ \hat\sigma_{\varepsilon,2} = `r ss2`$
 
 $LSTAR(2,2,0.131,10)$:
 
@@ -4002,8 +4020,10 @@ regStr2 <- getRegimeString(phi2, se2, p)
 ```
 
 $$
-X_t = \\
+X_t = \begin{matrix}
+\\
 (`r regStr1`) \ [1 - G_L(X_{t-`r d`}, `r c`, `r gamma`)] + \\ (`r regStr2`) \ G_L(X_{t-`r d`}, `r c`, `r gamma`) + \varepsilon_t
+\end{matrix}
 \\ \quad \hat\sigma_{\varepsilon}^2 = `r ss`
 $$
 
@@ -4011,8 +4031,8 @@ $LSTAR(2, 2, 0.192, 0.4, 10, 4)$:
 
 ```{r}
 mod <- models_s3[[ orders_s3[1] ]]
-p <- mod$p; d <- mod$d; c <- round(mod$c, 4); gamma <- round(mod$gamma, 4);
-phi <- round(mod$PhiParams, 4); se <- round(mod$PhiStErrors,4)
+p <- mod$p; d <- mod$d; c <- round(mod$c, 3); gamma <- round(mod$gamma, 3);
+phi <- round(mod$PhiParams, 2); se <- round(mod$PhiStErrors,2)
 
 Phi <- matrix(phi, nrow=3, byrow=T); Se <- matrix(se, nrow=3, byrow=T);
 phi1 <- Phi[1,]; phi2 <- Phi[2,]; phi3 <- Phi[3,]
@@ -4025,12 +4045,14 @@ regStr3 <- getRegimeString(phi3, se3, p)
 ```
 
 $$
-X_t = \\
+X_t = \begin{matrix}
+\\
 (`r regStr1`) \ [1 - G_L(X_{t-`r d`}, `r c[1]`, `r gamma[1]`)] + \\ 
 (`r regStr2`) \ [G_L(X_{t-`r d`}, `r c[1]`, `r gamma[1]`) - G_L(X_{t-`r d`}, `r c[2]`, `r gamma[2]`)] + \\
 (`r regStr3`) \ G_L(X_{t-`r d`}, `r c[2]`, `r gamma[2]`) + \varepsilon_t
-\\ \quad \hat\sigma_{\varepsilon}^2 = `r ss`
+\end{matrix}
 $$
+$\hat\sigma_{\varepsilon}^2 = `r ss`$
 
 ```{r}
 phi <- round(fitmsm2@Coef,4)
@@ -4053,12 +4075,12 @@ X_t = \begin{cases}
 $$
 
 ```{r}
-phi <- round(fitmsm3@Coef,4)
-se <- round(fitmsm3@seCoef,4)
+phi <- round(fitmsm3@Coef,2)
+se <- round(fitmsm3@seCoef,2)
 
-ss1 <- mean(msmResid(fitmsm3, regime=1)^2)
-ss2 <- mean(msmResid(fitmsm3, regime=2)^2)
-ss3 <- mean(msmResid(fitmsm3, regime=3)^2)
+ss1 <- round(mean(msmResid(fitmsm3, regime=1)^2), 3)
+ss2 <- round(mean(msmResid(fitmsm3, regime=2)^2), 3)
+ss3 <- round(mean(msmResid(fitmsm3, regime=3)^2), 3)
 
 regStr1 <- getRegimeString(phi[1,], se[1,], p=2)
 regStr2 <- getRegimeString(phi[2,], se[2,], p=2)
@@ -4071,15 +4093,20 @@ X_t = \begin{cases}
 `r regStr1` + \varepsilon_t &\quad \text{if } s_t = 1 \\
 `r regStr2` + \varepsilon_t &\quad \text{if } s_t = 2 \\
 `r regStr3` + \varepsilon_t &\quad \text{if } s_t = 3
-\end{cases} \\ \quad \hat\sigma_{\varepsilon, 1}^2 = `r ss1` \ , \ \hat\sigma_{\varepsilon, 2}^2 = `r ss2` \ , \ \hat\sigma_{\varepsilon, 3}^2 = `r ss3`
+\end{cases}
 $$
+$\hat\sigma_{\varepsilon, 1}^2 = `r ss1` \ , \ \hat\sigma_{\varepsilon, 2}^2 = `r ss2` \ , \ \hat\sigma_{\varepsilon, 3}^2 = `r ss3`$
 
-$ANN(2, 2)$:
+$ANN(2, 2)$:  
 
 $$
-X_t = `r beta0` + `r beta1` G(\gamma_1^{\top} Y_t) + `r beta2` G(\gamma_2^{\top} Y_t) + \varepsilon_t \\
-\gamma_1 = (`r gamma01`, `r gamma11`, `r gamma21`)^{\top} \ , \ \gamma_2 = (`r gamma02`, `r gamma12`, `r gamma22`)^{\top} \\
+X_t = `r beta0` + `r beta1` G(\gamma_1^{\top} Y_t) + `r beta2` G(\gamma_2^{\top} Y_t) + \varepsilon_t
+$$
+$$
+\begin{matrix}
+\gamma_1 = (`r gamma10`, `r gamma11`, `r gamma21`)^{\top} \ , \ \gamma_2 = (`r gamma10`, `r gamma12`, `r gamma22`)^{\top} \\
 Y_t = (1, X_{t-1}, X_{t-2})^{\top} \ , \ G(x) = 1 /(1 + \text{e}^{-x}) \\
-\hat\sigma_{\varepsilon}^2 = `r ann_sig2`
+\hat{\sigma}_{\varepsilon}^2 = `r ann_sig2`
+\end{matrix}
 $$
 
