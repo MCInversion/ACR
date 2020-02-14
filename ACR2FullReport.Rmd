@@ -1,0 +1,4085 @@
+---
+title: "ACR2Full"
+output:  pdf_document
+author: "Martin Cavarga"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+---
+\fontsize{10}{10}
+\small
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+```{r, echo=FALSE}
+pkgTest <- function(x) {
+  if (!require(x,character.only = TRUE)) {
+    install.packages(x, dep=TRUE)
+    if(!require(x,character.only = TRUE)) stop("Package not found")
+  }
+}
+```
+
+# Advanced Methods of Time Series Analysis Applied to Quarterly Estimates of Unemployment Rate
+
+## Introduction
+
+The chosen source of data is the Labour Force Survey (LFS) quarterly estimates of unemployment rate in the UK since March 1971, up to March 2018.
+
+---------------------------------------------------------------------------------------
+
+## 1. Elementary Modeling by an AR Process
+
+We begin by extracting the data from a downloaded file
+
+```{r getData}
+setwd("./")
+dat <- read.table("LFS_unemployment.csv", header=F, skip=6, sep = ",", as.is = T)
+dat <- dat[50:239,]
+names(dat) <- c("quartile", "unemp")
+dat$time <- dat$quartile[grepl('\\d{4}\\sQ\\d', dat$quartile)]
+
+# data.frame(head(dat$time)) # how the quarterly data looks
+
+months <- (as.numeric(gsub("\\d{4}\\sQ(\\d)","\\1", dat$time)) - 1) * 3
+# data.frame(head(months))
+years <- as.numeric(gsub("(\\d{4})\\sQ\\d","\\1", dat$time))
+# data.frame(head(years))
+years <- years + months / 12
+# data.frame(head(years)) # how the time data should look
+
+dat$time <- years
+```
+
+### 1.1: Data Plot
+
+```{r initDataPlot, fig.width=10, fig.height=4.5}
+plot(x=dat$time, y=dat$unemp, type="l", lwd=2, xlab="year", ylab = "unemployment [%]", 
+     main="Unemployment Rate (quarterly)")
+```
+
+Now even thought we are working with annual data there should not be any seasonal components or trend
+since the results do not depend on periodic observable phenomena, but rather the complex economic 
+situation over multiple decades. Also the data may include exponentially decaying decrease in unemployment,
+but only after year 1980, which would suggest a regime-switching stochastic process. 
+
+### 1.2: Test Part and Evaluation Part of the Time Series
+
+Now we separate the time series into test part, where a suitable model of a stochastic process will
+be found, and the evaluation part, where predictions given by such model are evaluated. Since our
+dataset contains quarterly data, we choose the length of the evaluation part of the time series as 
+$L = 4k$ where k is an arbitrary (and sufficiently small) positive integer. We put $k = 5$ for 5 years' length
+of the evaluation series.
+
+```{r}
+k = 5 # how many years
+L = k * 4
+N = length(dat$unemp)
+unempseries <- list(unempts = ts(dat$unemp))
+
+unempseries$test = window(unempseries$unempts, start=1, end=N - L, extend=T)
+unempseries$eval = window(unempseries$unempts, start=N - L + 1, end=N, extend=T)
+```
+
+```{r testEvalPlot, fig.width=9, fig.height=4}
+par(mfrow=c(1,1))
+plot(x=dat$time, y=dat$unemp, main="Test and Evaluation Part of the Quarterly Series", 
+     xlab="year", ylab="unemployment [%]",type="l")
+lines(head(dat$time, n = N - L), unempseries$test, col="red", lwd=2)
+lines(tail(dat$time, n = L), unempseries$eval, col="blue", lwd=2)
+legend("topright", legend=c("test","eval"), col=c("red","blue"), lty=1, lwd=2, cex=0.8)
+```
+
+### 1.3: Mean, Variance, ACF, and PACF of the Test Part
+
+```{r}
+stat <- summary(as.numeric(dat$unemp)[1:(N - L)])
+stddev <- var(unempseries$test, na.rm = TRUE)
+v <- as.numeric(c(stat[1], stat[6], stat[4], stat[3], stddev))
+names(v)<-c("Min.","Max.","Mean","Median","Variance")
+v
+```
+
+```{r ACFplot1, fig.width=9, fig.height=4}
+par(mfrow=c(1,2))
+acf(as.numeric(unempseries$test), lag.max=N, main="unemp. ACF")
+acf(as.numeric(unempseries$test), lag.max=N, type="partial",main="unemp. PACF")
+```
+
+As we mentioned in section 1.1, the underlying process which gave rise to the observed results is aperiodic,
+yet it is undoubtedly a process with memory. Unemployment rate strongly depends (aside from other important aspects)
+on its own history which might extend generations into the past. The results are, however, significantly influenced
+by external phenomena, such as the global economic crisis in late 2000's.
+
+### 1.4: Finding a Suitable AR Model
+
+Since the economic situation and the job market remembers its past, we choose a simple $AR(p)$ process with parameter p
+corresponding to the number of steps after which the process still "remembers" its past. We search for
+the model with the lowest AIC (Akaike's Information Criterion). 
+And by plotting the `AIC` parameter, we obtain differences $AIC_{min} - AIC_k$ for all models.
+
+```{r AICplot1, fig.width=10, fig.height=4}
+kmax = 30 # set a maximum order
+
+model <- list()
+xt <- as.numeric(unempseries$test); nt <- length(xt)
+model$ar<- ar(as.numeric(unempseries$test), order.max=kmax)
+
+
+par(mfrow=c(1,2))
+plot(0:(length(model$ar$aic)-1), xlab="p", model$ar$aic, ylab="dAIC", main="Differences in AIC")
+tmp <- sapply(1:kmax, function(x) ar(as.numeric(unempseries$test), aic=F, order.max=x)$var.pred)
+plot( tmp, xlab="p", ylab="sigma^2", main="Residual variances")
+```
+
+As we can see in the figures, the lowest variance of residues corresponds to an $AR(3)$ process:
+
+```{r}
+p <- model$ar$order
+coef = round(model$ar$ar, 3)
+se = round(sqrt(diag(model$ar$asy.var.coef)), 3)
+
+suppressMessages(pkgTest("forecast"))
+res <- as.numeric(na.omit(model$ar$resid))
+fit <- as.numeric(fitted( arima(xt, order=c(p, 0, 0)) ))
+fit <- fit[(p + 1):length(fit)]
+sigSq = mean(res^2)
+```
+$$
+X_t = (`r coef[1]` \pm `r se[1]`) X_{t-1} + (`r coef[2]` \pm `r se[2]`) X_{t-2} + (`r coef[3]` \pm `r se[3]`) X_{t-3} + \varepsilon_t \ , \ \ \hat\sigma_{\varepsilon} = `r sigSq`
+$$
+While testing the validity of our linear model, we can easily use an automatic search procedure `auto.arima()` from the `forecast` package:
+```{r}
+m_arima <- auto.arima(xt)
+pdq <- arimaorder(m_arima)
+```
+
+Which shows that the best fit would be produced by an $ARIMA(`r pdq[1]`, `r pdq[2]`, `r pdq[3]`)$. The fact that the raw data is likely integrated with $d=1$ suggests that we should consider modeling 1st differences of the series instead.
+
+```{r}
+xt <- na.omit(diff(as.numeric(dat$unemp))) # take differences in data
+x_train <- xt[seq_along(unempseries$test)] # extract test part
+nt <- length(x_train)
+x_eval <- xt[(nt + 1):length(xt)] # extract eval part
+xt <- x_train # set the source data to test part values
+
+m_arima_diff <- auto.arima(xt)
+pdq_diff <- arimaorder(m_arima_diff)
+```
+
+```{r FitARPlot, fig.width=10, fig.height=4}
+ model$AR <- arima(as.numeric(unempseries$test), order=c(p, 0, 0))
+unempseries$ARfit <- fitted(model$AR)
+unempseries$ARresid <- residuals(model$AR)
+
+par(mfrow=c(1,2))
+plot(x=dat$time[1:(N - L)], y=as.numeric(unempseries$test), 
+     main="Fitted Values of the Test Part", 
+     xlab="year", ylab="unemployment [%]",type="p")
+lines(x=dat$time[1:(N - L)], y=unempseries$ARfit, col="blue", lwd=2)
+legend("topright", legend=c(paste0("AR(",p,")")), col=c("blue"), lty=1, lwd=2, cex=0.8)
+plot(x=dat$time[1:(N - L)], y=unempseries$ARresid, main="Residuals", xlab="year", 
+     ylab="[%]", type="l")
+
+ model$AR_diff <- arima(xt, order=pdq_diff)
+unempseries$ARfit_diff <- fitted(model$AR_diff)
+unempseries$ARresid_diff <- residuals(model$AR_diff)
+
+plot(x=dat$time[1:(N - L)], y=xt, 
+     main="Fitted Values of the diff(Test Part)", 
+     xlab="year", ylab="diff(unemployment) [%]",type="p")
+lines(x=dat$time[1:(N - L)], y=unempseries$ARfit_diff, col="blue", lwd=2)
+legend("topright", legend=c(paste0("ARIMA(",paste(pdq_diff,collapse=","),")")), col=c("blue"), lty=1, lwd=2, cex=0.8)
+plot(x=dat$time[1:(N - L)], y=unempseries$ARresid_diff, main="Residuals", xlab="year", 
+     ylab="[%]", type="l")
+```
+
+When we do, in fact, take differences of the time series (as shown on the bottom plot), an ARIMA search procedure 
+returns model $ARIMA(`r pdq_diff[1]`, `r pdq_diff[2]`, `r pdq_diff[3]`)$ as a best fit.
+
+### 1.5: 1-Step Predictions Over the Evaluation Part
+
+```{r PredictionsARPlot, fig.width=8, fig.height=3}
+tmp <- Arima(as.numeric(dat$unemp), model = model$AR)
+model$ARpred <- window(fitted(tmp), start = N - L + 1)
+
+RMSE <- sqrt(mean((as.numeric(unempseries$eval) - as.numeric(model$ARpred))^2))
+
+par(mfrow=c(1,1))
+plot(x=dat$time[(N - L + 1):N], y=dat$unemp[(N - L + 1):N], 
+     main=paste0("AR(",p,") 1-step forecast\n RMSE = ",round(RMSE, digits = 4)), 
+     xlab="year", ylab="unemployment [%]",type="p", pch=20)
+lines(x=dat$time[(N - L + 1):N], y=model$ARpred, lwd=2.5, col="blue")
+```
+
+### 1.6.: Conclusion
+
+Since it has very low rate of local oscillation, but does not have an easily predictable systematic pattern,
+the analyzed unemployment rate time series seems to be well-estimated by an $AR(`r p`)$ process with low prediction errors.
+Automatic search procedure `auto.arima()` determined the best fit to be an $ARIMA(`r pdq[1]`, `r pdq[2]`, `r pdq[3]`)$, i.e. we are
+most likely dealing with an integrated process of first order. Hence, from now on, we will carry out our analysis on first differences
+of the series.
+
+However, as we mentioned earlier we might be dealing with a 'regime-switching' process, which will be examined by suitable 
+linearity/nonlinearity tests in the following chapters.
+
+---------------------------------------------------------------------------------------
+
+## 2. Finding the Parameters of a SETAR Model
+
+The unemployment time series might be a result of a regime-switching process. Naturally, the behavior
+ of the unemployment rate in a given country should depend on the current economic situation. The change in the local economy
+can be described, for example, via a set of "thresholds" which determine whether the stochastic process changes its regime. The regime of
+a stochastic process is defined by a unique ARMA or any other linear stochastic process with unique parameters. 
+
+Since we are dealing with differences, i.e. rate of change of unemployment rate, we can also interpret the model regimes as 
+regimes of "growth" and "decrease" in unemployment, since undoubtedly, higher unemployment rate induces even more unemployment due to
+the lack of job opportunities.
+
+We begin by finding the parameters of a Self-Exciting Threshold Autoregressive (SETAR) process, that is: a process whose regime 
+is described by a random variable determined by the very process itself, more specifically its history of up to d steps behind,
+which in an essence means that the process "influences its regime" up to d time steps into the future.
+
+For the purposes of this analysis we consider only 2 regimes, namely the regime of "job crisis" when the unemployment rate may 
+fluctuate or drop more wildly compared to the regime of "job stability" when the unemployment rate stabilizes or grows.
+
+### 2.1: Useful Functions
+
+First, we define a, so called, "indicator function" which essentially returns a boolean value from a given input process
+  value `x` and threshold value `c`:
+  
+$$
+I(z_t, c) = \begin{cases}
+       0 &\quad\text{if } z_t \leq c \\
+       1 &\quad\text{if } z_t > c \\
+     \end{cases}
+$$
+
+```{r}
+Indicator <- function(x, c) ifelse(x > c, 1, 0)
+```
+
+Afterwards, we define the basis vector for a single regime as:
+
+$$
+Y_t = (1, X_{t-1}, X_{t - 2})^{\top}
+$$
+ 
+```{r}
+Yt <- function(x, t, p) c(1, x[(t - 1):(t - p)])
+```
+
+which can then be used in the basis for two regimes
+```{r}
+Xt <- function(x, t, p, d, c, z = x) {  
+  # z is the threshold variable 
+  I <- Indicator(z[t - d], c)
+  Y <- Yt(x, t, p)
+  c((1 - I) * Y, I * Y)
+}
+```
+Then we need a deterministic skeleton of the model:
+$$
+F(z_t, \theta) = \begin{cases}
+       \phi_{1,0} + \phi_{1,1}X_{t-1} + ... + \phi_{1,p_1} X_{t-p_1} &\quad\text{if } z_t \leq c \\
+       \phi_{2,0} + \phi_{2,1}X_{t-1} + ... + \phi_{2,p_2} X_{t-p_2} &\quad\text{if } z_t > c \\
+     \end{cases}
+$$
+```{r}
+SkeletonSETAR <- function(x, t, p, d, c, theta, z = x) theta %*% Xt(x, t, p, d, c, z)
+```
+
+and the last group of functions we need for the upcoming procedure are functions for the information criteria
+of a SETAR model:
+
+$$
+AIC_{SETAR} = \sum_{j=1}^{m}(n_j \log{\hat\sigma_{\varepsilon,j}} + 2 (p_j + 1)) \ , \quad BIC_{SETAR} = \sum_{j=1}^{m}(n_j \log{\hat\sigma_{\varepsilon,j}} + \log{n_j} (p_j + 1)) \ , \ m = 2
+$$
+```{r}
+# Akaike
+AIC_SETAR <- function(orders, regimeDataCount, resVariances) {
+  sum(regimeDataCount * log(resVariances) + 2 * (orders + 1))
+}
+
+# Bayesian
+BIC_SETAR <- function(orders, regimeDataCount, resVariances) {
+  sum(regimeDataCount * log(resVariances) + log(regimeDataCount) * (orders + 1))
+} 
+
+#' and test it out:
+
+# AIC_SETAR(c(2, 2), c(10, 10), c(0.5, 0.7))
+# BIC_SETAR(c(2, 2), c(10, 10), c(0.5, 0.7))
+```
+
+### 2.2: The Estimation of Parameters of a SETAR Model
+
+Given a dataset `x` and parameters `p` (AR order), `d` (SETAR delay), and the threshold `c` we find the coefficients
+of a SETAR model with these parameters by performing a multivariate linear regression (a custom `EstimSETAR` method). The coefficient vector `PhiParams`
+is the vector of unknowns of a linear system with matrix $\textbf{X}$ and a right-hand-side vector $\textbf{y}$ 
+given by the time series. Although for higher values of `p` the inversion of matrix $\textbf{X}^{\top}\textbf{X}$ (with dimensions 
+ $(2p + 2) \times (2p + 2)$) might be computationally demanding, we will determine the covariance matrix, i.e.: $(\textbf{X}^{\top}\textbf{X})^{-1}$
+using a function `inv` from the `matlib` package.
+```{r}
+suppressMessages(pkgTest("zeallot"))
+suppressMessages(pkgTest("matlib"))
+
+EstimSETAR <- function(x, p, d, c) {
+
+  resultModel <- list()
+  resultModel$p = p; resultModel$d = d; resultModel$c = c;
+  resultModel$data = x;  n = length(x);  resultModel$n = n;
+  k <- max(p, d)
+  
+  X <- as.matrix(apply(as.matrix((k + 1):n), MARGIN=1, function(t) Xt(x, t, p, d, c) ))
+  y <- as.matrix(x[(k + 1):n])
+  
+  A = crossprod(t(X), t(X));  b = crossprod(t(X), y)
+
+  if (abs(det(A)) > 0.000001) {
+    inv <- inv(A)
+    sol_phi <- as.numeric(t(inv %*% b)); sol_se <- sqrt(diag(inv)/n);
+    eps <- 0.01;
+    
+    # filter out those coeffs that are of the same order of magnitude as their errors
+    filter <- sapply(1:(2*(p + 1)), function (i) ifelse(
+      abs(sol_phi[i]) <= 2 * abs(sol_se[i]), 0, 1)
+    )
+    
+    sol_phi <- sol_phi * filter
+    sol_se <- sol_se * filter
+    
+    solution <- cbind(phi = sol_phi,  se = sol_se)
+
+    resultModel$PhiParams <- solution[,1] # solving (X'X)*phi = X'y
+    resultModel$PhiStErrors <- solution[,2]  # standard errors
+    skel <- crossprod(X, resultModel$PhiParams); resultModel$skel <- skel;
+    resultModel$residuals <- (y - skel)
+    resultModel$resSigmaSq <- 1 / (n - k) * sum(resultModel$residuals ^ 2)
+    resultModel$name <- paste0("SETAR(",p,",",d,",",round(c,3),")")
+    resultModel$nReg <- 2 # 2 regimes
+    
+    return(resultModel)
+  } else {
+    return(NA)
+  }
+}
+```
+After performing this procedure for multiple parameters, i.e.: searching the discrete parameter space, we 
+further process the model with minimum residual square sum. For that we'll use a postprocessing method, in which we determine the following model attributes:
+$n_1$, $n_2$ (regime data counts), $\hat\sigma_{\varepsilon,1}$, $\hat\sigma_{\varepsilon,2}$ (regime residual variances), and information criteria ($AIC$, $BIC$).
+```{r}
+EstimSETAR_postproc <- function(model) {
+  x <- model$data; k <- max(model$p, model$d); c <- model$c; n <- model$n;
+  y <- as.matrix(x[(k + 1):n])
+  skel <- model$skel; model$skel <- NULL; #skel attribute no longer needed
+
+  model$n1 <- sum(apply(as.matrix(x), MARGIN = 1, function(xt) (1 - Indicator(xt, c))))
+  model$n2 <- sum(apply(as.matrix(x), MARGIN = 1, function(xt) Indicator(xt, c)))
+  
+  model$resSigmaSq1 <- sum(
+    apply(as.matrix(seq_along(y)), MARGIN = 1,
+          function(t) ifelse((1 - Indicator(y[t], c)), (y[t] - skel[t])^2, 0))) / (model$n1 - k)
+  model$resSigmaSq2 <- sum(
+    apply(as.matrix(seq_along(y)), MARGIN = 1,
+          function(t) ifelse(Indicator(y[t], c), (y[t] - skel[t])^2, 0))) / (model$n2 - k)
+  
+  model$AIC <- AIC_SETAR(c(p, p), c(model$n1, model$n2), c(model$resSigmaSq1, model$resSigmaSq2))
+  model$BIC <- BIC_SETAR(c(p, p), c(model$n1, model$n2), c(model$resSigmaSq1, model$resSigmaSq2))
+  
+  return(model)
+}
+```
+The model should contain the following attributes in total:
+```{r}
+model <- EstimSETAR(xt, 2, 2, c=0)
+str( model <- EstimSETAR_postproc(model) )
+```
+
+It should be noted that for some values of `p` and `d` the indices of arrays in the algorithms might 
+get out of the range of regularity for the linear system. For that reason we implement exceptions for
+the outputs of `EstimSETAR` in the following algorithm.
+
+### 2.3: SETAR Parameter Estimation Procedure
+
+To answer the question: 'how does one find the right parameters `p`, `d` and `c` for their desired SETAR model?',
+we implement a procedure for a grid of sampled parameters:
+```{r}
+pmax <- 7 # set maximum order p
+# limit the c parameter by the 7.5-th and 92.5 percentile
+cmin <- as.numeric(quantile(xt, 0.075)); cmax <- as.numeric(quantile(xt, 0.925));
+h = (cmax - cmin) / 100 # determine the step by which c should be iterated
+```
+$$
+p = `r paste0(1:pmax, collapse=",")` \ , \ d = 1,..., \ p \quad c = `r paste0(seq(cmin, cmax, h)[1:3], collapse=",")`...`r paste0(seq(cmin, cmax, h)[97:100], collapse=",")`
+$$
+After iterating through thresholds $c$, we pick the model with the lowest residual variance.
+```{r}
+models <- list()
+modelColumns <- list()
+for (p in 1:pmax) {
+  for (d in 1:p) {
+    pdModels <- list()
+    for (c in seq(cmin, cmax, h)) {
+      tmp <- EstimSETAR(xt, p, d, c) # try to run the function
+      # then test whether it returns`NA` as a result
+      if (!as.logical(sum(is.na(tmp))) ) {
+        pdModels[[length(pdModels) + 1]] <- tmp
+      }
+    }
+    sigmas <- as.numeric(lapply(pdModels, function(m) m$resSigmaSq))
+    orders <- order(sigmas)
+    # only the model whose parameter c gives the lowest residual square sum is chosen for postprocessing
+    min_sigma_model <- EstimSETAR_postproc(pdModels[[ orders[1] ]])
+    models[[length(models) + 1]] <- min_sigma_model
+    modelColumns[[length(modelColumns) + 1]] <- c(
+      p, d, min_sigma_model$c,
+      min_sigma_model$n1, min_sigma_model$n2,
+      min_sigma_model$AIC, min_sigma_model$BIC,
+      min_sigma_model$resSigmaSq)
+  }
+}
+modelColumns <- data.frame(matrix(unlist(modelColumns), nrow=length(modelColumns), byrow=T))
+names(modelColumns) <- c(
+  "p", "d", "c",
+  "n1", "n2", "AIC", "BIC",
+  "resSigmaSq"
+)
+```
+After we have a set of models in their original, we choose
+12 models with the lowest BIC (Bayesian Information Criterion):
+```{r}
+BICs <- sapply(models, function(m) m$BIC)
+orders <- order(BICs)
+modelColumns <- modelColumns[orders,]
+head(modelColumns, n=12)
+```
+and we can also include standard errors of the estimated regression coefficients (of at least the first 3 models):
+```{r}
+modelCoeffErrors <- list()
+for(i in 1:3) {
+  p <- models[[ orders[i] ]]$p
+  d <- models[[ orders[i] ]]$d
+  c <- models[[ orders[i] ]]$c
+  key <- models[[ orders[i] ]]$name
+  modelCoeffErrors[[key]] <- rbind(t(models[[ orders[i] ]]$PhiParams),
+                                   t(models[[ orders[i] ]]$PhiStErrors))
+  row.names(modelCoeffErrors[[key]]) <- t(c("Phi", "stdError"))
+}
+modelCoeffErrors
+```
+Note, that we intentionally set coefficients, whose standard errors exceed half of their estimated value, to zero. 
+
+We can now visualize the results of the top 3 models:
+```{r SETARTop3Plot, fig.width=9, fig.height=3.6}
+plotNmax <- 75
+par(mfrow=c(1,2))
+for (i in 1:3) {
+  model <- models[[orders[i]]]
+  SetarFit <- xt - append(matrix(0., ncol=model$p), model$residuals)
+  m <- length(model$residuals)
+
+  plot(x=dat$time[1:plotNmax], y=xt[1:plotNmax],
+       main=paste("SETAR(",model$p,",",model$d,",",round(model$c, digits=4),")"), xlab="year", ylab="%")
+  lines(x=dat$time[1:plotNmax], y=SetarFit[1:plotNmax], col="blue",lwd=2)
+  legend("topleft", legend=c("fitted SETAR"), col=c("blue"), lty=1, lwd=2, cex=0.8)
+  
+  plot(x=dat$time[1:plotNmax], y=model$residuals[1:plotNmax], type="l", 
+       main=paste0("SETAR(",model$p,",",model$d,",",round(model$c, digits=4),") Residuals"),
+       xlab="year", ylab="%")
+}
+```
+
+### 2.4: SETAR Equilibria and Equilibrium Simulations
+
+It is also essential to find out whether the skeletons of the selected SETAR models have some equilibria.
+The estimation of the exact equilibria of the piecewise-linear skeletons with $p = 1$ is straightforward: We find the fixed points
+of the skeletons by finding the intersections between their graphs and the identity line $\text{id} x = x$, given the model parameters
+(coefficients). However, the  results of our search have mostly higher AR degrees, thus we will need to determine the models'
+equilibria using a more general method, namely letting the model skeletons evolve with multiple input initial conditions.
+
+```{r SETARTop3Equilibria, fig.width=9, fig.height=3.5}
+xmax <- 0.5; xmin <- -0.2;
+n <- length(xt)
+simPlotMax <- 3 * n
+par(mfrow=c(1,2))
+for (i in 1:12) {
+  equilib_sims <- list()
+  equilibria <- list()
+  p <- models[[orders[i] ]]$p; d <- models[[orders[i] ]]$d; c <- models[[orders[i] ]]$c;
+  sigmaSq <- models[[orders[i] ]]$resSigmaSq
+  k <- max(p, d)
+  n_offsets <- 20
+  for (j in 0:n_offsets) {
+    x0 <- (xmax - xmin) / n_offsets * j + xmin
+    equilib_sim <- array()
+    equilib_sim[1] <- x0
+    for (t in 2:simPlotMax) {
+      if (t < (k + 1)) {
+        equilib_sim[t] <- equilib_sim[t - 1]
+      } else {
+        equilib_sim[t] <- SkeletonSETAR(equilib_sim, t, p, d, c, t(models[[orders[i]]]$PhiParams))
+      }
+    }
+    
+    equilibrium_rounded <- round(equilib_sim[simPlotMax], digits=4)
+    equilibria[[paste(equilibrium_rounded)]] <- equilibrium_rounded
+    equilib_sims[[j + 1]] <- equilib_sim
+    
+    if (j < 1) {
+      plot(x=1:simPlotMax, y=equilib_sim, type="l", col="gray", 
+           xlim=c(1, n / 6), ylim=c(1.1 * xmin, 1.1 * xmax), 
+           main=paste("SETAR(",models[[orders[i] ]]$p,",",models[[orders[i] ]]$d,",",
+                      round(models[[orders[i] ]]$c, digits=4),")"),
+           xlab="t", ylab="%")
+    } else {
+      lines(x=1:simPlotMax, y=equilib_sim, col="gray")
+    }
+  }
+  for (j in 0:n_offsets) {
+    epsilon <- (xmax - xmin) * 0.025
+    x0 <- c + (n_offsets / 2 - j) * epsilon #small initial perturbations from the threshold value
+    equilib_sim <- array()
+    equilib_sim[1] <- x0
+    for (t in 2:simPlotMax) {
+      if (t < (k + 1)) {
+        equilib_sim[t] <- equilib_sim[t - 1]
+      } else {
+        equilib_sim[t] <- SkeletonSETAR(equilib_sim, t, p, d, c, t(models[[orders[i]]]$PhiParams))
+      }
+    }
+    equilib_sims[[j + 1]] <- equilib_sim
+    lines(x=1:simPlotMax, y=equilib_sim, lwd=2)
+    lines(x=c(1, simPlotMax), y=c(c, c), col="green", lty="dashed", lwd=2)
+  }
+  
+  models[[orders[i] ]]$equilibria <- as.numeric(equilibria)
+}
+
+modelEquilibria <- sapply(1:3, function(i) models[[orders[i] ]]$equilibria)
+names(modelEquilibria) <- sapply(1:3, function(i) 
+  paste("SETAR(", p, ",", d, ",", round(c, digits=3), ") equilibria"))
+modelEquilibria
+```
+Note that we generated an additional set of trajectories (black) close to the threshold $c$.
+
+As we see, the trajectories of the top 3 models gravitate towards 0 in all models, but in the first and second model they can end up in one more position, close to zero. 
+Fourth, eight and the following models seem to have a limit cycle behavior, in which their values can spontaneously switch to another equilibrium, and even oscillate between them.
+
+It might also be interesting to see how the trajectories evolve when we add an iid noise on top of the model skeleton. We carry out multiple simulations with initial 
+conditions close to the threshold. The added noise will have the same deviance as the residual square sum.
+
+```{r SETARsimulations, fig.width=9, fig.height=4}
+xmax <- 5 * max(xt); xmin <- min(xt) - 0.5 * xmax;
+xmax0 <- max(xt); xmin0 <- min(xt)
+par(mfrow=c(1,2))
+for (i in 1:3) {
+  equilib_sims <- list()
+  p <- models[[orders[i] ]]$p; d <- models[[orders[i] ]]$d; c <- models[[orders[i] ]]$c;
+  sigmaSq <- models[[orders[i] ]]$resSigmaSq
+  k <- max(p, d)
+  n_offsets <- 10
+  for (j in 0:n_offsets) {
+    x0 <- (xmax - xmin) / n_offsets * j - 0.5 * (xmax - xmin)
+    equilib_sim <- array()
+    equilib_sim[1] <- x0
+    for (t in 2:plotNmax) {
+      if (t < (k + 1)) {
+        equilib_sim[t] <- equilib_sim[t - 1] + rnorm(1, 0, sqrt(sigmaSq))
+      } else {
+        equilib_sim[t] <- SkeletonSETAR(equilib_sim, t, p, d, c, t(models[[orders[i]]]$PhiParams)) +
+          rnorm(1, 0, sqrt(sigmaSq))
+      }
+    }
+    equilib_sims[[j + 1]] <- equilib_sim
+    if (j < 1) {
+      plot(x=dat$time[1:plotNmax], y=equilib_sim, type="l", col="gray", 
+           ylim=c(1.5 * xmin, 1.5 * xmax), 
+           main=models[[ orders[i] ]]$name,
+           xlab="year", ylab="%")
+    } else {
+      lines(x=dat$time[1:plotNmax], y=equilib_sim, col="gray")
+    }
+  }
+  for (j in 0:n_offsets) {
+    epsilon <- (xmax - xmin) * 0.025
+    x0 <- c + (n_offsets / 2 - j) * epsilon #small initial perturbations from the threshold value
+    equilib_sim <- array()
+    equilib_sim[1] <- x0
+    for (t in 2:plotNmax) {
+      if (t < (k + 1)) {
+        equilib_sim[t] <- equilib_sim[t - 1] + rnorm(1, 0, sqrt(sigmaSq))
+      } else {
+        equilib_sim[t] <- SkeletonSETAR(equilib_sim, t, p, d, c, t(models[[orders[i]]]$PhiParams)) +
+          rnorm(1, 0, sqrt(sigmaSq))
+      }
+    }
+    equilib_sims[[j + 1]] <- equilib_sim
+    lines(x=dat$time[1:plotNmax], y=equilib_sim, lwd=2)
+    lines(x=c(dat$time[1], dat$time[plotNmax]), y=c(c, c), col="green", lty="dashed", lwd=2)
+  }
+  # comparison of the original data with the simulation of the original time series
+  
+  x0 <- xt[1]
+  equilib_sim <- array()
+  equilib_sim[1] <- x0
+  for (t in 2:plotNmax) {
+    if (t < (k + 1)) {
+      equilib_sim[t] <- equilib_sim[t - 1] + rnorm(1, 0, sqrt(sigmaSq))
+    } else {
+      equilib_sim[t] <- SkeletonSETAR(equilib_sim, t, p, d, c, t(models[[orders[i]]]$PhiParams)) +
+        rnorm(1, 0, sqrt(sigmaSq))
+    }
+  }
+  simMax <- max(equilib_sim, xmax0); simMin <- min(equilib_sim, xmin0);
+  plot(x=dat$time[1:plotNmax], y=xt[1:plotNmax], type="l", lwd=1.5, ylim=c(simMin, 1.1 * simMax), 
+       main=paste0("Simulation ",models[[ orders[i] ]]$name),
+       xlab="year", ylab="%")
+  lines(x=dat$time[1:plotNmax], y=equilib_sim, col="purple", lwd=2)
+  lines(x=c(dat$time[1], dat$time[plotNmax]), y=c(c, c), col="green", lty="dashed", lwd=2)
+  legend("topleft", legend=c("original ts","simulated SETAR","threshold"), col=c("black","purple","green"), 
+         lty=c(1,1,2), lwd=2, cex=0.8)
+}
+```
+
+The trajectories of all of the first three models seem to gravitate toward `0` significantly fast (or alternatively:
+towards their threshold values which are close to zero as well). The relatively low oscillation rate of the original 
+time series suggests that the differences of this time series will, at most, fluctuate around 0. The change between 
+the 'high' and 'low' regimes does not seem very significant, at leat on the larger scale. The validity of the model 
+will be tested in chapter 3.
+
+### 2.6: Conclusion
+
+The results of the SETAR Parameter Estimation Procedure in section 2.3 show that the 3 best 2-regime SETAR
+models are:
+```{r top3conc}
+results <- list()
+for (i in 1:3) {
+  p <- models[[ orders[i] ]]$p
+  d <- models[[ orders[i] ]]$d
+  c <- round(models[[ orders[i] ]]$c, digits=4)
+  results[[i]] <- models[[ orders[i] ]]$name
+}
+data.frame(unlist(results))
+```
+The first model with the lowest `BIC` (Bayesian Information Criterion) has the most accurate estimation of its 4 regression parameters:
+
+```{r}
+mod <- models[[ orders[1] ]]
+p <- mod$p; d <- mod$d; c <- round(mod$c, 4)
+phi <- round(mod$PhiParams, 4); se <- round(mod$PhiStErrors,4)
+ss <- round(mod$resSigmaSq, 4); ss1 <- round(mod$resSigmaSq1, 4); ss2 <- round(mod$resSigmaSq2, 4)
+```
+
+$$
+X_t = \begin{cases}
+(`r phi[2]` \pm `r se[2]`)X_{t-1} + (`r phi[3]` \pm `r se[3]`)X_{t-2} + \varepsilon_t &\quad\text{if } X_{t-`r d`} \leq `r c` \\
+(`r phi[4]` \pm `r se[4]`) + (`r phi[5]` \pm `r se[5]`)X_{t-1} + (`r phi[6]` \pm `r se[6]`)X_{t-2} + \varepsilon_t &\quad\text{if } X_{t-`r d`} > `r c` \\
+\end{cases} \quad \hat\sigma_{\varepsilon}^2 = `r ss` \ , \ \hat\sigma_{\varepsilon,1} = `r ss1` \ , \ \hat\sigma_{\varepsilon,2} = `r ss2`
+$$
+
+--------------------------------------------------------------------------------------------------------------
+
+## 3: Tests of Linearity/Nonlinearity of SETAR models
+
+We need to make sure a non-linear model (SETAR, for example) is really suitable for describing the process. 
+In order to find out, we test the null hypothesis that a linear model is more suitable than a non-linear one. 
+In the case of a 2-regime model we are looking for, so called, nuisance parameters, i.e.: $H_0: \Phi_1 = \Phi_2$ where
+$\Phi_1$ and $\Phi_2$ are the parameters of the low and the high regime respectively.
+
+### 3.1: Hansen's Conditions
+
+Hansen proposed three conditions to test whether a SETAR model can be tested for linearity using the so called
+Likelihood-Ratio (LR) test.
+```{r}
+Hansen <- function(d, c, Phi) {
+  p <- (length(Phi)/2) - 1
+  #separate regimes into rows
+  Phi <- do.call(rbind, split(Phi,rep(1:2,each=(p + 1))))
+  # (p10-p20)+(p1d-p2d)*c <= 0
+  c1 <- !isTRUE(all.equal( 0, apply(Phi[,c(1,1 + d),drop=F],2, diff) %*% c(1,c) ))
+  # p1j neq p2j, j notin {0,d}
+  c2 <- all(apply(Phi[,-c(1,1 + d),drop=F], 2, function(x) !identical(0, diff(x))))
+  # sum_j|pij| < 1 forall i=1,2
+  c3 <- all(apply(Phi[,-1,drop=F], 1, function(x) sum(abs(x))) < 1)
+  c(cond1=c3, cond2=c2, cond3=c3)
+}
+```
+If all three of Hansen's conditions are satisfied the model can be tested using a specialized LR test.
+```{r}
+hansenResults <- matrix(NA, ncol=3, nrow=12)
+keys <- array()
+for (i in 1:12) {
+  p <- models[[ orders[i] ]]$p
+  d <- models[[ orders[i] ]]$d
+  c <- models[[ orders[i] ]]$c
+  keys[i] <- models[[ orders[i] ]]$name
+  hansenResults[i,] <- Hansen(d, c, models[[ orders[i] ]]$PhiParams)
+}
+row.names(hansenResults) <- keys
+colnames(hansenResults) <- c("cond1","cond2","cond3")
+
+hansenResults
+```
+It appears that only the fourth, fifth, and the nineth model can be tested using the LR test. The rest will have to be 
+assessed using the Lagrange Multiplier (LM) test.
+
+### 3.2: LR and LM Tests
+
+In this section we perform the basic procedures for the LR (Likelihood Ratio), and LM (Lagrange Multiplier) tests, 
+and afterward we interpet the results:
+```{r}
+LRtest <- function(x, p, var, alpha=0.05) {
+  tmp <- ar(x, aic=F, order.max=pmax, method = "ols")
+  tmp <- tmp$var.pred  # linear model residual variance
+  testat <- length(x)*(tmp-var)/tmp  # test statistic
+  CDF <- Vectorize( function(t) {  # test statistic CDF
+    fun <- function(t) 1 + sqrt(t/(2*pi))*exp(-t/8) + 1.5*exp(t)*pnorm(-1.5*sqrt(t)) -
+      (t+5)*pnorm(-sqrt(t)/2)/2
+    if(abs(t)>300 || is.infinite(t)) return(sign(t))
+    if(t >=0 ) fun(t) else 1-fun(-t)
+  })
+  # for alpha=2.5%: CV=11.03329250
+  if(alpha==0.05) critval <- 7.68727553
+  else critval <- uniroot(function(x) CDF(x) - (1-alpha), c(-1000,1000))$root
+  # (test statistics, critical value, p-value)
+  c(TS=testat, CV=critval, p_value=1-CDF(testat))
+}
+
+# LRtest(xt, models[[ orders[1] ]]$p, models[[ orders[1] ]]$resSigmaSq)
+
+suppressMessages(pkgTest("dynlm"))
+
+LMtest <- function(x, p, d, alpha = 0.05) {
+  # prevent from passing (accidental and needless) name to result
+  names(p) <- NULL
+  # if x is not a ts object, by chance
+  x <- as.ts(x)
+  # requires dynlm package (it can be implemented withou dynlm, see model2)
+  model1 <- dynlm(x ~ L(x,1:p))
+  y <- model1$residuals
+  # a list of shifted time series
+  tmp <- c(
+    list(y),
+    lapply(1:p, function(i) stats::lag(x, -i)), 
+    lapply(1:p, function(i) stats::lag(x, -i)*stats::lag(x,-d)),
+    list(stats::lag(x,-d)^3)
+  )
+  tmp <- do.call(function(...) ts.intersect(..., dframe=T), tmp)
+  names(tmp) <- c("y", paste0("x",1:p), paste0("xd",1:p), "xd^3")
+  # cannot be done with the dynlm package
+  model2 <- lm(y ~ ., data = tmp)
+  z <- model2$residuals
+  testat <- (length(x)-p) * (sum(y^2)/sum(z^2) - 1)
+  c(TS=testat, CV=qchisq(1-alpha, df=p+1), p_value=1-pchisq(testat, df=p+1))
+}
+
+# LMtest(xt, models[[ orders[1] ]]$p, models[[ orders[1] ]]$d)
+
+alpha = 0.05
+results <- list()
+nonlinear <- list()
+nonLinCount <- 0
+nonLinOrders <- c()
+for (i in 1:12) {
+  p <- models[[ orders[i] ]]$p; d <- models[[ orders[i] ]]$d; c <- models[[ orders[i] ]]$c;
+  hansenResult <- Hansen(d, c, models[[ orders[i] ]]$PhiParams)
+  if (FALSE %in% hansenResult) {
+    hansenResult <- FALSE
+    testResult <- LMtest(xt, p, d)
+  } else {
+    hansenResult <- TRUE
+    testResult <- LRtest(xt, p, models[[ orders[i] ]]$resSigmaSq)
+  }
+  if (testResult[3] < alpha) {
+    linearity <- "rejected"
+    nonLinCount <- nonLinCount + 1
+    nonlinear[[nonLinCount]] <- models[[ orders[i] ]]
+    nonLinOrders <- c(nonLinOrders, orders[i])
+  } else {
+    linearity <- "accepted"
+  }
+  results[[i]] <- cbind(models[[ orders[i] ]]$name, hansenResult, round(t(testResult), 4), linearity)
+}
+results <- data.frame(matrix(unlist(results), nrow=12, byrow=T), stringsAsFactors=F)
+colnames(results) <- c("model", "Hansen Cond.", "TS", "CV", "p-value", "linearity")
+row.names(results) <- orders[1:12]
+results[,2] <- as.logical(results[,2])
+
+results
+```
+For significance level `alpha = 0.05` the linearity hypothesis is not rejected only for the following
+models:
+```{r topNullHyp}
+nullHyp <- subset(results, results[,5] < 0.05)
+nullHyp[,1]
+```
+
+### 3.3 Modified LR Test Via Boostrapping
+
+The proposed LR test has a significant drawback in the fact that it can only be done when Hansen's 
+conditions are satisfied. This is due to the fact that we do not know the distribution of the resulting 
+F-statistic. According to Hansen (1996), however, the distribution of a bootstrapped statistic $F^*$ converges
+weakly in probability to the distribution of $F$, so that repeated bootstrap draws from $F^*$ can be used to
+approximate the asymptotic distribution of $F$.
+```{r}
+signif_code <- function(p_val) {
+  return (
+    ifelse(p_val < 0.1 && p_val >= 0.05, ".",
+           ifelse(p_val < 0.05 && p_val >= 0.01, "*",
+                  ifelse(p_val < 0.01 && p_val >= 0.001, "**", 
+                         ifelse(p_val < 0.001, "***", "")
+                  )
+           )
+    )
+  )
+}
+
+LRtest_Hansen <- function(model, alpha=0.05, nboot=100) {
+  x <- model$data; p <- model$p; d <- model$d; var <- model$resSigmaSq
+  linear <- ar(x, aic=F, order.max=pmax, method = "ols")
+  linearVar <- linear$var.pred  # linear model residual variance
+  Fstat <- length(x)*(linearVar-var)/linearVar  # test statistic
+
+  
+  if (FALSE %in% Hansen(p, d, model$PhiParams)) {
+    suppressMessages(pkgTest("tsDyn"))
+    suppressMessages(pkgTest("parallel"))
+    suppressMessages(pkgTest("doSNOW")) # using doSNOW package for parllel computing
+    n_cores <- detectCores() - 1
+    cl <- makeCluster(n_cores, type="SOCK")
+    registerDoSNOW(cl)
+    log <- capture.output({
+      testResults <- suppressWarnings(
+        setarTest(x, m=p, thDelay=0:(d - 1), nboot=nboot ,trim=0.1, test="1vs", hpc="foreach")
+      )
+    })
+    stopCluster(cl)
+
+    p_val <- testResults$PvalBoot[1]
+    boot_Fstat <- testResults$Ftests[1]
+    critVal <- ifelse(alpha == 0.1, testResults$CriticalValBoot[1, 1],
+                      ifelse(alpha == 0.05, testResults$CriticalValBoot[1, 2],
+                             ifelse(alpha == 0.025, testResults$CriticalValBoot[1, 3],
+                                    ifelse(alpha == 0.01, testResults$CriticalValBoot[1, 4], NA)
+                                    )
+                             )
+                      )
+    c(
+        model=model$name,
+        TS=round(boot_Fstat, digits=4),
+        CV=round(critVal, digits=4),
+        p_value=round(p_val, digits=6),
+        signif=signif_code(p_val)
+      )
+  } else {
+    CDF <- Vectorize( function(t) {  # test statistic CDF
+      fun <- function(t) 1 + sqrt(t/(2*pi))*exp(-t/8) + 1.5*exp(t)*pnorm(-1.5*sqrt(t)) -
+        (t+5)*pnorm(-sqrt(t)/2)/2
+      if(abs(t)>300 || is.infinite(t)) return(sign(t))
+      if(t >=0 ) fun(t) else 1-fun(-t)
+    })
+    if(alpha==0.05) critval <- 7.68727553 # for alpha=2.5%: CV=11.03329250
+    else critval <- uniroot(function(x) CDF(x) - (1-alpha), c(-1000,1000))$root
+    p_val = 1 - CDF(Fstat)
+    c(
+      model=model$name,
+      TS=round(Fstat, digits=4),
+      CV=round(critval, digits=4),
+      p_value=round(p_val, digits=6),
+      signif=signif_code(p_val)
+      )
+  }
+}
+
+df <- list()
+pvals <- c(); times <- list()
+for (i in 1:12) {
+  times[[i]] <- system.time(df[[i]] <- LRtest_Hansen(models[[ orders[i] ]], nboot=100))
+  df[[i]][6] <- paste(round(times[[i]][3], digits=4),"s")
+  pvals[i] <- df[[i]][4]
+}
+
+df <- data.frame(matrix(unlist(df), nrow=length(df), byrow=T))
+colnames(df) <- c("model","TV", "CV", "p-value", "", "time")
+df
+```
+In the above table, we list the results of the modified LR test with significance codes `.` (`p-value` $\in [0.05, 0.1)$), `*` (`p-value` $\in [0.01, 0.05)$), `**` (`p-value` $\in [0.001, 0.01)$), and `***` (`p-value` $ < 0.001$), and with computation time denoted in the `time` column.
+
+### 3.4 Visualisation of Non-Linear Models
+
+From the results of the previous procedure, we will visualize the models for which the linearity
+null-hypothesis was rejected based on the LR and LM tests:
+
+```{r trueSETARs, fig.width=10, fig.height=3.9}
+# par(mfrow=c(1,2))
+# xmax <- max(xt); xmin <- min(xt) - 0.5 * xmax;
+# xmax <- xmax + 0.2 * (xmax - xmin)
+# nonLinOrders <- vector()
+# for (i in 1:12) {
+#   if (pvals[i] < alpha) {
+#     nonLinOrders <- c(nonLinOrders, orders[i])
+#     p <- models[[ orders[i] ]]$p
+#     d <- models[[ orders[i] ]]$d
+#     c <- models[[ orders[i] ]]$c
+#     x0 <- as.numeric(unempseries$test)[1]
+#     fitted <- xt[1:(N - L)] - models[[ orders[i] ]]$residuals[1:(N - L)]
+#   
+#     plot(x=dat$time[1:(N - L)], y=xt[1:(N - L)], ylim=c(xmin, xmax),
+#        main=paste("SETAR(",p,",",d,",",round(c, digits=4),")"), 
+#        xlab="year", ylab="diff(unemp) [%]",type="p")
+#     lines(x=dat$time[1:(N - L)], y=fitted, lwd=2, col="royalblue2")
+#     lines(x=c(dat$time[1], dat$time[(N - L)]), y=c(c, c), col="brown3", 
+#         lty="dashed", lwd=2)
+#    legend("topleft", legend=c("fitted SETAR","threshold"), col=c("royalblue2","brown3"),
+#          lty=c(1,2), lwd=2, cex=0.8)
+#   
+#    plot(x=dat$time[1:(N - L)], y=models[[ orders[i] ]]$residuals[1:(N - L)], type="l", lwd=1.5,
+#        main=paste("SETAR(",p,",",d,",",round(c, digits=4),") residuals"), xlab="year",
+#         ylab="diff(unemp) [%]", ylim=c(xmin, xmax))
+#    print( c(resSigmaSq = models[[ orders[i] ]]$resSigmaSq) )
+#  }
+#}
+
+par(mfrow=c(1,2))
+xmax <- max(xt); xmin <- min(xt) - 0.5 * xmax;
+xmax <- xmax + 0.2 * (xmax - xmin)
+for (i in 1:nonLinCount) {
+  p <- nonlinear[[i]]$p
+  d <- nonlinear[[i]]$d
+  c <- nonlinear[[i]]$c
+  x0 <- as.numeric(unempseries$test)[1]
+  fitted <- xt[1:(N - L)] - nonlinear[[i]]$residuals[1:(N - L)]
+  #diffsum <- sapply(1:(N - L), function(j) { x0 + sum(fitted[1:j]) })
+  plot(x=dat$time[1:(N - L)], y=xt[1:(N - L)], ylim=c(xmin, xmax),
+       main=paste("SETAR(",p,",",d,",",round(c, digits=4),")"), 
+       xlab="year", ylab="diff(unemp) [%]",type="p")
+  lines(x=dat$time[1:(N - L)], y=fitted, lwd=2, col="royalblue2")
+  lines(x=c(dat$time[1], dat$time[(N - L)]), y=c(c, c), col="brown3", lty="dashed", lwd=2)
+  legend("topleft", legend=c("fitted SETAR","threshold"), col=c("royalblue2","brown3"), lty=c(1,2), lwd=2, cex=0.8)
+  
+  plot(x=dat$time[1:(N - L)], y=nonlinear[[i]]$residuals[1:(N - L)], type="l", lwd=1.5,
+       main=paste("SETAR(",p,",",d,",",round(c, digits=4),") residuals"), xlab="year", ylab="diff(unemp) [%]", ylim=c(xmin, xmax))
+  # print( c(resSigmaSq = nonlinear[[i]]$resSigmaSq) )
+}
+
+# nonLinOrders
+```
+
+### 3.5 Conclusion
+
+In the above tests, linearity was rejected for the following models: `r nullHyp[,1]`, and thus the validity of their SETAR2 estimation is accepted.
+It is not yet clear whether another regime should be present in the stochastic process. This will be assessed in the following chapter.
+
+## 4. 3-Regime SETARs and Diagnostic Tests of SETAR Models
+
+The next step in the analysis using SETAR models is verifying whether 2 regimes suffice. If they do not, we will have 
+to consider the possibility that a third regime needs to be added. In that case, we need to write methods for such model
+
+### 4.1 Useful Functions
+
+An indicator of a 3-regime SETAR model can take a vector form:
+
+$$
+I(z_t, c_1, c_2) = \begin{cases}
+(1, 0, 0) &\quad\text{if } z_t \leq c_1 \\
+(0, 1, 0) &\quad\text{if } c_1 < z_t \leq c_2 \\
+(0, 0, 1) &\quad\text{if } z_t > c_2 \\
+\end{cases}
+$$
+
+and autoregression combination given by a column vector $Y_t$ can be obtained as a direct product $I(z_t, c_1, c_2) \otimes Y_t$. 
+Using this approach, one can then easily determine the model's covariance matrix
+```{r}
+# the indicator function for 3 regimes:
+Indicator3 <- function(x, c) {
+  tmp <- rep(F,3)
+  tmp[findInterval(x, c, left.open = T) + 1] <- T
+  tmp
+}
+
+# Indicator3(-4, c(-1,1))
+# Indicator3(0, c(-1,1))
+# Indicator3(4, c(-1,1))
+
+# SETAR3 basis vector
+Yt3 <- function(x, t, p) c(1, x[(t - 1):(t - p)])
+
+# SETAR3 skeleton
+Xt3 <- function(x, t, p, d, c, z = x) {  
+  # z is the threshold variable 
+  I <- Indicator3(z[t - d], c)
+  Y <- Yt(x, t, p)
+  c(I[1] * Y, I[2] * Y, I[3] * Y)
+}
+
+# covariance matrix of the 3 regime SETAR
+CovMat3 <- function(x, p, d, c) {
+  n <- length(x)
+  # this will become the covariance matrix
+  Yc <- matrix(0., ncol = (3 * p + 3), nrow = (3 * p + 3))
+  k <- max(p, d)
+  for (t in (k + 1):n) {
+    XT <- Xt3(x, t, p, d, c)
+    Yc <- Yc + (XT %o% XT)
+  }
+  det <- det(Yc)
+  if (det > -0.00001 && det < 0.00001) {
+    return(NA)
+  } else {
+    return(inv(Yc))
+  }
+}
+
+cat("SETAR(1, 1, -0.1, 0.2) cov. matrix:\n")
+CovMat3(xt, p=1, d=1, c=c(-0.1, 0.2))
+```
+of parameters $\phi_{i,j}$, $j = 1, 2$, $i = 0,1,...,p$.
+
+### 4.2 The Brock-Dechert-Scheinkman (BDS) Test
+
+Regarded as the most successful tests for nonlinearity due to its universality, the BDS test relies on evaluating a correlation integral $C(q,r)$
+as a measure of repeated occurrence of patterns in the time series. It is the estimate of the probability of two arbitrary $q$-dimensional
+points in $\mathbb{R}^q$ being no further than $r \hat{\sigma}_\varepsilon$ apart ($0.5 \leq r \leq 1.5$). If the data is generated by an 
+iid process, the correlation integral should approach $C(q,r) \rightarrow C(1, r)^q$.
+
+```{r bdsTesting}
+nlinOrders <- c() # buffer to store indices for models with setar3 candidates
+nlinNames <- c()
+for (i in 1:12) { # length(nonLinOrders)
+  test <- tseries::bds.test(na.omit(models[[ orders[i] ]]$residuals), m = 3)
+  p <- models[[ orders[i] ]]$p
+  d <- models[[ orders[i] ]]$d
+  c <- models[[ orders[i] ]]$c
+  name <- models[[ orders[i] ]]$name 
+  if ( mean(c(test$p.value) > alpha) > 0.5 ) {
+    cat("remaining nonlinearity rejected ", name," with mean p-val = ", mean(c(test$p.value) > alpha), "\n")
+  } else {
+    cat("possible remaining nonlinearity for",name ," with mean p-val = ", mean(c(test$p.value) > alpha), "\n")
+    nlinOrders <- c(nlinOrders, orders[i])
+    nlinNames <- c(nlinNames, name)
+  }
+}
+# nonLinOrders <- oldNlinOrders
+cat("\n==== Remaining nonlinearities detected for: ======\n")
+nlinNames
+
+```
+
+### 4.3 SETAR3 Parameter Estimation
+
+Similarly to section 2.3, we construct an estimation procedure with two distinct threshold parameters $c_1$ and $c_2$. Our helper functions are ready
+from section 4.1. Since the number of regimes $m$ appears as a parameter in the implementation above, we can compose a generalized method for estimation
+and postprocessing for any number of regimes with output:
+```{r estimSETAR3}
+suppressMessages(pkgTest("zeallot"))
+suppressMessages(pkgTest("matlib"))
+
+EstimSETAR3 <- function(x, p, d, c) {
+    resultModel <- list()
+    resultModel$p = p; resultModel$d = d; resultModel$c = c;
+    resultModel$data = x;  n = length(x);  resultModel$n = n;
+    
+    k <- max(p, d)
+    
+    X <- as.matrix(apply(as.matrix((k + 1):n), MARGIN=1, function(t) Xt3(x, t, p, d, c) ))
+    y <- as.matrix(x[(k + 1):n])
+    K <- CovMat3(x, p, d, c); b <- crossprod(t(X), y);
+    
+    if (as.logical(sum(is.na(K)))) {
+      return(NA)
+    } else {
+      sol_phi <- as.numeric(t(K %*% b)); sol_se <- sqrt(diag(K)/n);
+      eps <- 0.01;
+      
+      # filter out those coeffs that are of the same order of magnitude as their errors
+      filter <- sapply(1:(3*(p + 1)), function (i) ifelse(
+          abs(sol_phi[i]) <= 2 * abs(sol_se[i]), 0, 1
+        )
+      )
+      
+      sol_phi <- sol_phi * filter
+      sol_se <- sol_se * filter
+      
+      solution <- cbind(phi = sol_phi,  se = sol_se)
+      resultModel$PhiParams <- solution[,1] # solving (X'X)*phi = X'y
+      resultModel$PhiStErrors <- solution[,2]  # standard errors
+      skel <- crossprod(X, resultModel$PhiParams); resultModel$skel <- skel;
+      resultModel$residuals <- (y - skel)
+      resultModel$resSigmaSq <- 1 / (n - k) * sum(resultModel$residuals ^ 2)
+      
+      return(resultModel)
+    }
+}
+
+# str( test_model <- EstimSETAR3(xt, p=2, d=1, c=c(-0.1, 0.2)) )
+
+EstimSETAR3_postproc <- function(model) {
+    x <- model$data; k <- max(model$p, model$d); p <- model$p; c <- model$c; n <- model$n;
+    y <- as.matrix(x[(k + 1):n])
+    skel <- model$skel; # model$skel <- NULL; #skel attribute no longer needed
+    
+    # regime counts
+    nRegCounts <- rowSums( matrix(as.numeric((sapply(x, function(xi) Indicator3(xi, c)))), nrow=3) )
+    model$nRegCounts <- nRegCounts
+    # names(model$nRegCounts) <- c("n1", "n2", "n3")
+    
+    # regime sigma sq:
+    regSigmaSq <- rowSums( 
+      matrix(
+        as.numeric((sapply(y, function(xi) Indicator3(xi, c)))), nrow=3)
+       %*% (y - skel)^2 ) / (nRegCounts - k)
+    model$regSigmaSq <- regSigmaSq
+    # names(model$regSigmaSq) <- c("rss1", "rss2", "rss3")
+    
+    # count valid p orders
+    pOrders <- rowSums(
+      matrix(as.numeric((
+        sapply(1:(3 * (p + 1)), 
+               function(i) ifelse( (i %% (p + 1) != 1 && model$PhiParams[i] != 0), 1, 0) )
+        )
+      ), nrow=3, byrow=T)
+    )
+    model$pOrders <- pOrders
+    # names(model$pOrders) <- c("p1", "p2", "p3")
+    
+    model$AIC <- AIC_SETAR(pOrders, model$nRegCounts, model$resSigmaSq)
+    model$BIC <- BIC_SETAR(pOrders, model$nRegCounts, model$resSigmaSq)
+  
+    return(model)
+}
+
+# str( test_model <- EstimSETAR3_postproc(test_model) )
+
+Indicator_m <- function(x, c, m) {
+  tmp <- rep(F, m)
+  tmp[findInterval(x, c, left.open = T) + 1] <- T
+  tmp
+}
+
+Xt_m <- function(x, t, p, d, c, m=2, z = x) {
+  I <- Indicator_m(z[t - d], c, m)
+  Y <- Yt(x, t, p)
+  sapply(1:m, function(j) I[j] * Y)
+}
+
+# test for packages
+suppressMessages(pkgTest("zeallot"))
+suppressMessages(pkgTest("matlib"))
+
+EstimSETAR_m <- function(x, p, d, c, m) {
+    m = as.integer(m)
+    if (m <= 0) {
+      message("Error: regime count m has to be a positive integer")
+      return(NA)
+    }
+    if (length(c) != m - 1) {
+      message("Error: Incompatible dimensions of threshold vector and regime count.");
+      return(NA)
+    }
+    
+    resultModel <- list()
+    resultModel$nReg <- m
+    resultModel$p = p; resultModel$d = d; resultModel$c = c;
+    resultModel$data = x;  n = length(x);  resultModel$n = n;
+    
+    k <- max(p, d)
+    
+    X <- as.matrix(apply(as.matrix((k + 1):n), MARGIN=1, function(t) Xt_m(x, t, p, d, c, m) ))
+    y <- as.matrix(x[(k + 1):n])
+    K <- crossprod(t(X), t(X)); b <- crossprod(t(X), y);
+    
+    detK <- abs(det(K))
+    
+    if (detK < 0.000001) {
+      return(NA)
+    } else {
+      K <- inv(K)
+      sol_phi <- as.numeric(t(K %*% b)); sol_se <- sqrt(diag(K)/n);
+      eps <- 0.01;
+      
+      # filter out those coeffs that are of the same order of magnitude as their errors
+      filter <- sapply(1:(m*(p + 1)), function (i) ifelse(
+          abs(sol_phi[i]) <= 2 * abs(sol_se[i]), 0, 1
+        )
+      )
+      
+      sol_phi <- sol_phi * filter
+      sol_se <- sol_se * filter
+      
+      solution <- cbind(phi = sol_phi,  se = sol_se)
+      resultModel$PhiParams <- solution[,1] # solving (X'X)*phi = X'y
+      resultModel$PhiStErrors <- solution[,2]  # standard errors
+      skel <- crossprod(X, resultModel$PhiParams); resultModel$skel <- skel;
+      resultModel$residuals <- (y - skel)
+      resultModel$resSigmaSq <- 1 / (n - k) * sum(resultModel$residuals ^ 2)
+      
+      return(resultModel)
+    }
+}
+
+EstimSETAR_m_postproc <- function(model) {
+    m <- model$nReg; x <- model$data; n <- model$n;
+    k <- max(model$p, model$d); p <- model$p; c <- model$c; 
+    y <- as.matrix(x[(k + 1):n])
+    skel <- model$skel;
+    
+    # regime counts
+    nRegCounts <- rowSums( matrix(as.numeric( sapply(x, function(xi) Indicator_m(xi, c, m)) ), nrow=m) )
+    model$nRegCounts <- nRegCounts
+    
+    # count valid p orders
+    pOrders <- rowSums(
+      matrix(as.numeric((
+        sapply(1:(m * (p + 1)), 
+               function(i) ifelse( (i %% (p + 1) != 1 && model$PhiParams[i] != 0), 1, 0) )
+        )
+      ), nrow=m, byrow=T)
+    )
+    model$pOrders <- pOrders
+    
+    k_m <- pmax(pOrders, model$d) # k-offset for different regimes
+    
+    # regime sigma sq:
+    regSigmaSq <- rowSums( 
+      matrix(as.numeric( 
+        sapply(y, function(xi) Indicator_m(xi, c, m)) ), nrow=m) %*% (y - skel)^2 ) / (nRegCounts - k_m)
+    model$regSigmaSq <- regSigmaSq
+    # names(model$regSigmaSq) <- sapply(1:m, function(j) paste0("rss", j))
+    
+    model$AIC <- AIC_SETAR(pOrders, model$nRegCounts, model$resSigmaSq)
+    model$BIC <- BIC_SETAR(pOrders, model$nRegCounts, model$resSigmaSq)
+    
+    c <- round(c, digits=3) # 3 dec. places seems enough
+    model$name <- paste0("SETAR(", p, ",", d, ",", paste(na.omit(c), collapse=','), ")")
+  
+    return(model)
+}
+
+getModelName <- function(model) {
+  p <- model$p; d <- model$d; c <- round(model$c, digits=3) # 3 dec. places seems enough
+  paste0("SETAR(", p, ",", d, ",", paste(na.omit(c), collapse=','), ")")
+}
+
+cat("SETAR(2, 1, -0.1), m=2 \n");
+str( EstimSETAR_m_postproc( EstimSETAR_m(xt, p=2, d=1, c=-0.1, m=2) ) ) # 2 regimes
+
+cat("SETAR(2, 1, -0.1, 0.2), m=3 \n");
+str( EstimSETAR_m_postproc( EstimSETAR_m(xt, p=2, d=1, c=c(-0.1, 0.2), m=3) ) ) # 3 regimes
+
+cat("SETAR(2, 1, -0.1, 0.1, 0.2), m=4 \n");
+str( EstimSETAR_m_postproc( EstimSETAR_m(xt, p=2, d=1, c=c(-0.1, 0.1, 0.2), m=4) ) ) # 4 regimes
+
+```
+
+### 4.4 SETAR Estimation procedure
+
+Now that we prepared all necessary functions we may proceed to search for 3-regime SETAR's in a suitable search space. This time
+we will construct our outer loop through delays $d$ which will be reduced to only the delays that are contained within the models
+with detected remaining nonlinearity:
+
+```{r}
+cat(" unique delays: ")
+( delays <- unique(sapply(1:length(nlinOrders), function(i) models[[ nlinOrders[i] ]]$d)) )
+```
+```{r}
+m <- 3 # 3-regime setars
+pmax <- 7 # set maximum order p
+# limit the c parameter by the 7.5-th and 92.5 percentile
+cmin <- as.numeric(quantile(xt, 0.075)); cmax <- as.numeric(quantile(xt, 0.925));
+h = (cmax - cmin) / 50 # determine the step by which c should be iterated
+```
+Still, even after this alleviation, the search might be computationally demanding. To obtain our results within reasonable time
+we use `foreach` and `doParallel` packages to compute search through $c_1$ and $c_2$ thresholds, and then process the results. Similraly to section 2.3, we iterate through
+$$
+p = `r paste0(1:pmax, collapse=",")` \ , \ d = 1,..., \ p \ , \quad c_1, c_2 = `r paste0(seq(cmin, cmax, h)[1:3], collapse=",")`...`r paste0(seq(cmin, cmax, h)[97:100], collapse=",")`
+$$
+
+```{r setar3Estim}
+models3 <- list()
+model3Columns <- list()
+
+suppressMessages(pkgTest("foreach"))
+suppressMessages(pkgTest("doParallel"))
+
+pkgs <- c("zeallot", "matlib")
+
+n_cores <- (detectCores() - 1)
+
+for (d in delays) {
+  for (p in d:pmax) {
+    # PARALLEL LOOP
+
+    cl <- makeCluster(n_cores)
+    registerDoParallel(cl)
+    pdModels <- foreach(c1 = seq(from = cmin, to = cmax - h, by = h), .packages = pkgs) %:%
+      foreach(c2 = seq(c1 + h, cmax, by = h), .packages = pkgs) %dopar% {
+        # skip models with slim regime
+        if(sum(xt > c1 & xt < c2) < length(xt) * 0.15) {
+          NA
+        } else {
+          tmp <- EstimSETAR_m(xt, p, d, c(c1, c2), m) # try to run the function
+          # then test whether it returns`NA` as a result
+          if (!as.logical(sum(is.na(tmp))) ) {
+            list(tmp)
+          }          
+        }
+      }
+
+    stopCluster(cl)
+    
+    # OLD LOOP:
+    
+    #pdModels <- list()
+    #for(c1 in seq(from = cmin, to = cmax - h, by = h)) {
+    #  for(c2 in seq(c1 + h, cmax, by = h)) {
+    #    if(sum(xt > c1 & xt < c2) < length(xt) * 0.15) next # skip models with slim regime
+    #    tmp <- EstimSETAR_m(xt, p, d, c(c1, c2), m) # try to run the function
+    #    # then test whether it returns`NA` as a result
+    #    if (!as.logical(sum(is.na(tmp))) ) {
+    #      pdModels[[length(pdModels) + 1]] <- tmp
+    #    }
+    #  }
+    #}
+
+    # frankly, this is a mess, but I can only get this nested list from the parallel loop
+    pdOmitted <- lapply(unlist(pdModels, recursive=F), 
+                        function(m) if(!is.logical(m) && !is.null(m)) m else list(list(resSigmaSq = Inf)))
+    sigmas <- as.numeric(lapply(pdOmitted, function(m) m[[1]]$resSigmaSq))
+    s_orders <- order(sigmas)
+    # only the model whose parameter c gives the lowest residual square sum is chosen for postprocessing
+    min_sigma_model <- EstimSETAR_m_postproc(pdOmitted[[ s_orders[1] ]][[1]])
+    
+    models3[[length(models3) + 1]] <- min_sigma_model
+    model3Columns[[length(model3Columns) + 1]] <- c(
+      min_sigma_model$p, min_sigma_model$pOrders, d, round(min_sigma_model$c, digits=4),
+      min_sigma_model$nRegCounts,
+      min_sigma_model$AIC, min_sigma_model$BIC,
+      min_sigma_model$resSigmaSq)
+  }
+}
+
+```
+```{r}
+model3Columns <- data.frame(matrix(unlist(model3Columns), nrow=length(model3Columns), byrow=T))
+names(model3Columns) <- c(
+  "p", sapply(1:m, function(j) paste0("p", j)), "d", sapply(1:(m-1), function(j) paste0("c", j)),
+  sapply(1:m, function(j) paste0("n", j)), "AIC", "BIC",
+  "resSigmaSq"
+)
+BICs3 <- sapply(models3, function(m) m$BIC)
+
+orders3 <- order(BICs3)
+models3Out <- model3Columns[orders3,]
+head(models3Out, n=12)
+```
+
+These are the SETAR3 models that can replace the SETAR2's with remaining nonlinearity, ordered by $BIC$ with estimated coefficients:
+
+```{r}
+model3CoeffErrors <- list()
+for(o in orders3) {
+  p <- models3[[o]]$p
+  d <- models3[[o]]$d
+  c1 <- models3[[o]]$c[1]; c2 <- models3[[o]]$c[2];
+  key <- paste(p, d, round(c1, digits=4), round(c2, digits=4), sep="/")
+  model3CoeffErrors[[key]] <- rbind(t(models3[[o]]$PhiParams),
+                                   t(models3[[o]]$PhiStErrors))
+  row.names(model3CoeffErrors[[key]]) <- t(c("Phi", "stdError"))
+}
+models3[[orders3[2]]]$name
+model3CoeffErrors[[2]]
+```
+
+As we might notice, some models differ only in their information criteria and coefficients, since they were estimated from a different maximum order $p$.
+
+### 4.5 SETAR3 Visualisation
+
+```{r SETAR3Top3Plot, fig.width=10, fig.height=4}
+plotNmax <- 100
+par(mfrow=c(1,2))
+for (i in 1:min(3, length(orders3))) {
+  model <- models3[[orders3[i]]]
+  SetarFit <- xt - append(matrix(0., ncol=model$p), model$residuals)
+  c1 <- model$c[1]; c2 <- model$c[2];
+  name <- model$name
+
+  plot(x=dat$time[1:plotNmax], y=xt[1:plotNmax],
+       main=name, xlab="year", ylab="%")
+  lines(x=dat$time[1:plotNmax], y=SetarFit[1:plotNmax], col="blue",lwd=2)
+  lines(x=c(dat$time[1], dat$time[plotNmax]), y=c(c1,c1), col="brown3", lty="dashed", lwd=2)
+  lines(x=c(dat$time[1], dat$time[plotNmax]), y=c(c2,c2), col="green3", lty="dashed", lwd=2)
+  legend("topleft", legend=c("fitted SETAR3", "c1", "c2"), col=c("blue", "brown3", "green3"), lty=c(1,2,2), lwd=2, cex=0.8)
+  
+  plot(x=dat$time[1:plotNmax], y=model$residuals[1:plotNmax], type="l", 
+       main=paste0(name," Residuals"),
+       xlab="year", ylab="%")
+}
+```
+
+### 4.6 Conclusion
+
+Due to our limited sampling space of `delays` we obtained `r length(orders3)` possible $SETAR3(p, d, c_1, c_2)$ models, and since remaining
+SETAR3 nonlinearity was detected in `r length(nonlinear)` of the original SETAR2 models, we replace them by the top `r length(nonlinear)`
+newly found SETAR3's:
+
+```{r}
+# replace nonlinear
+for (i in 1:length(nlinOrders)) {
+  models[[ nlinOrders[i] ]] <- models3[[ orders3[i] ]]
+}
+BICs_revised <- sapply(models, function(m) m$BIC)
+orders <- order(BICs_revised)
+
+model_cols <- list()
+for (i in 1:12) {
+  p <- models[[ orders[i] ]]$p; d <- models[[ orders[i] ]]$d;
+  c <- round(ifelse(models[[ orders[i] ]]$c > 1, models[[ orders[i] ]]$c, c(models[[ orders[i] ]]$c, NA)), digits=3)
+  model_cols[[i]] <- c(model=models[[ orders[i] ]]$name, BIC=round(models[[ orders[i] ]]$BIC, digits=3))
+}
+
+model_cols <- unlist(model_cols)
+model_cols <- data.frame(matrix(unlist(model_cols), nrow=12, byrow=T))
+names(model_cols) <- c("model", "BIC")
+model_cols
+```
+To illustrate the inner dynamics of at least two highest ranked SETAR3 models, we use their respective coefficients:
+```{r}
+mod <- models[[ orders[3] ]]
+p <- mod$p; d <- mod$d; c <- round(mod$c, 4)
+phi <- round(mod$PhiParams, 4); se <- round(mod$PhiStErrors,4)
+
+Phi <- matrix(phi, nrow=3, byrow=T); Se <- matrix(se, nrow=3, byrow=T);
+phi1 <- Phi[1,]; phi2 <- Phi[2,]; phi3 <- Phi[3,]
+se1 <- Se[1,]; se2 <- Se[2,]; se3 <- Se[3,]
+ss <- round(mod$resSigmaSq, 4); ss1 <- round(mod$regSigmaSq[1], 4); ss2 <- round(mod$regSigmaSq[2], 4); ss3 <- round(mod$regSigmaSq[3], 4)
+
+getRegimeString <- function(phi, se, p) {
+  texXt <- sapply(0:p, function(i) ifelse(i==0, "", paste0("X_{t-",i,"}")))
+  regStr <- paste( sapply(1:(p+1), function(i) if(phi[i]==0) return("") else return(paste0("(", phi[i], "\\pm", se[i], ")", texXt[i])) ), collapse=" ")
+  regStr <- gsub('\\s\\s+', ' ', regStr)
+  regStr <- gsub('[ \\t]+$','', regStr) # remove trailing whitespace
+  regStr <- gsub('^\\s+', '', regStr) # remove leading whitespace
+  regStr <- gsub('\\s-','-', regStr) # negative coefficients
+  regStr <- gsub('\\s', '+', regStr) # positive coefficients
+  regStr
+}
+
+regStr1 <- getRegimeString(phi1, se1, p)
+regStr2 <- getRegimeString(phi2, se2, p)
+regStr3 <- getRegimeString(phi3, se3, p)
+
+```
+
+$$
+X_t = \begin{cases}
+`r regStr1` + \varepsilon_t &\quad\text{if } X_{t-`r d`} \leq `r c[1]` \\
+`r regStr2` + \varepsilon_t &\quad\text{if }`r c[1]` < X_{t-`r d`} \leq `r c[2]` \\
+`r regStr3` + \varepsilon_t &\quad\text{if }`r X_{t-`r d`} > `r c[2]` \\
+\end{cases} \quad \hat\sigma_{\varepsilon}^2 = `r ss` 
+$$
+
+$\hat\sigma_{\varepsilon,1} = `r ss1` \ , \ \hat\sigma_{\varepsilon,2} = `r ss2`$
+
+```{r}
+mod <- models[[ orders[4] ]]
+p <- mod$p; d <- mod$d; c <- round(mod$c, 4)
+phi <- round(mod$PhiParams, 4); se <- round(mod$PhiStErrors,4)
+
+Phi <- matrix(phi, nrow=3, byrow=T); Se <- matrix(phi, nrow=3, byrow=T);
+phi1 <- Phi[1,]; phi2 <- Phi[2,]; phi3 <- Phi[3,]
+se1 <- Se[1,]; se2 <- Se[2,]; se3 <- Se[3,]
+ss <- round(mod$resSigmaSq, 4); ss1 <- round(mod$regSigmaSq[1], 4); ss2 <- round(mod$regSigmaSq[2], 4); ss3 <- round(mod$regSigmaSq[3], 4)
+
+regStr1 <- getRegimeString(phi1, se1, p)
+regStr2 <- getRegimeString(phi2, se2, p)
+regStr3 <- getRegimeString(phi3, se3, p)
+```
+
+$$
+X_t = \begin{cases}
+`r regStr1` + \varepsilon_t &\quad\text{if } X_{t-`r d`} \leq `r c[1]` \\
+`r regStr2` + \varepsilon_t &\quad\text{if }`r c[1]` < X_{t-`r d`} \leq `r c[2]` \\
+`r regStr3` + \varepsilon_t &\quad\text{if }`r X_{t-`r d`} > `r c[2]`
+\end{cases} \quad \hat\sigma_{\varepsilon} = `r ss`
+$$
+
+$ \hat\sigma_{\varepsilon,1} = `r ss1` \ , \ \hat\sigma_{\varepsilon,2} = `r ss2`$
+
+## 5. Predictions via SETAR Models and Their Evaluation
+
+### 5.1 Helper functions
+
+Since we have not yet defined a skeleton function, i.e. one that would continue plugging in the time series values even after the end of
+testing data. For that purpose we implement a step-forward function for an $m$-regime SETAR equivalent to an $m$-regime skeleton:
+
+$$
+F(z_t, \theta) = \begin{cases}
+\phi_{0,1} + \phi_{1,1}X_{t-1} + ... + \phi_{p_1,1} &\quad\text{if } \ z_t \leq c_1  \\
+\phi_{0,2} + \phi_{1,2}X_{t-1} + ... + \phi_{p_2,2} &\quad\text{if } \ c_1 < z_t \leq c_2  \\
+\qquad \vdots & \qquad \vdots \qquad  \\
+\phi_{0,m} + \phi_{1,m}X_{t-1} + ... + \phi_{p_m,m} &\quad\text{if } \ z_t > c_{m-1}  \\
+\end{cases}
+$$
+
+```{r setarOneStep}
+SETAR_m_singleStep <- function(model, x, t) {
+  m <- model$nReg; n <- model$n;
+  p <- model$p; d <- model$d; c <- model$c; 
+  # parameter matrix with regime coefficients by row
+  Phi <- matrix(model$PhiParams, nrow=m)
+  
+  # extract regime vector
+  X <- Xt_m(x, t, p, d, c, m)
+  reg_id <- which(colSums(X!=0)!=0)
+  x_reg <- X[,reg_id]
+  Phi[reg_id,] %*% x_reg
+}
+```
+
+We can test it on a particular SETAR model:
+
+```{r setarStepTest}
+n_ahead <- 1
+model <- models[[ orders[3] ]]
+x_out <- c(x_train, rep(0, n_ahead)); nt <- length(x_train)
+  
+for (i in 1:n_ahead) {
+  x_out[nt + i] <- round(SETAR_m_singleStep(model, x_out, nt + i), 2)
+}
+xt <- c(xt, x_eval) # fuse test and eval data
+```
+```{r}
+cat(paste(model$name, "1-step:\n"))
+cat("x_out: "); x_out[nt:(nt + n_ahead)]
+cat("data: "); xt[nt:(nt + n_ahead)]
+```
+
+This is a single-step prediction of the data using the first model. When we set `n_ahead > 1`, the step function builds up
+upon previous predicted values and the skeleton converges to a model's particular equilibrium:
+
+```{r}
+n_ahead <- floor((length(x_eval) - 1) / 2)
+model <- models[[ orders[2] ]]
+x_out <- c(x_train, rep(0, n_ahead)); nt <- length(x_train)
+  
+for (i in 1:n_ahead) {
+  x_out[nt + i] <- SETAR_m_singleStep(model, x_out, nt + i)
+}
+cat(paste(model$name, "predict\n"))
+data.frame(cbind(x_out=x_out[nt:(nt + n_ahead)], data=xt[nt:(nt + n_ahead)]))
+cat("\n equilibria: "); model$equilibria
+```
+
+If the model is explosive, the predictions will diverge:
+
+```{r setarNaive, fig.width=10, fig.height=4}
+par(mfrow=c(1,2))
+n_ahead <- 18;
+nt <- length(x_train)
+history <- as.integer(0.075 * nt)
+for (i in 1:6) {
+  model <- models[[ orders[i] ]]
+  x_out <- c(x_train, rep(0, n_ahead)); 
+  
+  for (i in 1:n_ahead) {
+    x_out[nt + i] <- SETAR_m_singleStep(model, x_out, nt + i)
+  }
+  plt_range <- 1.3 * c(min(c(x_out, xt), na.rm=T), max(c(x_out, xt), na.rm=T))
+  time_range <- (nt - history):(nt + n_ahead)
+  
+  c <- model$c
+  if (length(c) > 1) {
+    plot(x=dat$time[time_range],y=xt[time_range], type="b", lwd=2,
+       ylim=plt_range, main=paste(model$name,"naive cumulative pred"), xlab="t", ylab="x[%]")
+    lines(x=dat$time[time_range], y=x_out[time_range], col="blue2", lwd=2)
+    lines(x=c(dat$time[(nt-history)], dat$time[(nt + n_ahead)]), y=c(c[1],c[1]), col="brown3", lty="dashed", lwd=2)
+    lines(x=c(dat$time[(nt-history)], dat$time[(nt + n_ahead)]), y=c(c[2],c[2]), col="green3", lty="dashed", lwd=2)
+    legend("topleft", legend=c("data", paste0(n_ahead,"-step"), "c1", "c2"), col=c("black", "blue", "brown3", "green3"), 
+           lty=c(NA, 1, 2, 2), pch=c(1, NA, NA, NA), lwd=2, cex=0.8)
+  } else {
+    plot(x=dat$time[time_range],y=xt[time_range], type="b", lwd=2,
+       ylim=plt_range, main=paste(model$name,"naive cumulative pred"), xlab="t", ylab="x[%]")
+    lines(x=dat$time[time_range], y=x_out[time_range], col="blue2", lwd=2)
+    lines(x=c(dat$time[(nt-history)], dat$time[(nt + n_ahead)]), y=c(c,c), col="green3", lty="dashed", lwd=2)
+    legend("topleft", legend=c("data", paste0(n_ahead,"-step"), "c"), col=c("black", "blue", "green3"), 
+           lty=c(NA, 1, 2), pch=c(1, NA, NA), lwd=2, cex=0.8)
+  }
+}
+
+```
+
+The examples above tested `r n_ahead` steps of a naiive approach to prediction, by assuming the process evolves via its skeleton. 
+More convenient approaches are `Monte Carlo` (`"MC"`) and `Bootstrap`. Both rely on adding noise to series predictions. Monte Carlo approach
+simulates normally distributed noise $\epsilon \sim N(0, \hat{\sigma}_{\varepsilon})$ from residual standard error $\hat{\sigma}_{\varepsilon}$, and
+Bootstrap, on the other hand, does not assume the normality of model residuals and instead randomly samples the residuals themselves.
+```{r setarPredict}
+PredictSETAR <- function(
+  model, x_train, x_eval, horizon=(length(x_eval) + 1), n_ahead=1, 
+  type=c("naive", "MC", "bootstrap"), Nboot=100, alpha=0.2, refit=F,
+  single.step=F, return.paths=F) {
+
+  type <- match.arg(type)
+  
+  p <- model$p;  d <- model$d; # model dims
+
+  if(missing(x_train)) {
+    x_train = model$data # training sample
+  }
+  
+  # result series
+  x_res <- x_train
+  # training sample size
+  nt <- length(x_res)
+  sd_res <- sqrt(model$resSigmaSq)
+
+  # extract model residuals
+  resid <- as.numeric(model$residuals)
+  resid <- resid[!is.na(resid)]
+  
+  # fill the prediction part of the array with zeros
+  x_res <- c(x_res, rep(0, horizon))
+  xrange <- p - ((p - 1):0)
+  
+  if(type=="naive") Nboot <- 1
+  
+  predictions <- function(x_res, eval.model=model, tmin=nt) {
+    noise <- switch(
+      type, 
+        "naive"= rep(0, n_ahead), 
+        "MC"= rnorm(n_ahead, mean = 0, sd=sd_res), 
+        "bootstrap" = sample(resid, size=n_ahead, replace=T)
+    )
+
+    for(t in (tmin + (1:n_ahead))) {
+      x_res[t] <- SETAR_m_singleStep(eval.model, x_res, t)
+      if (!single.step) x_res[t] <- x_res[t] + noise[t - tmin]
+    }
+    
+    if (!single.step) {
+      return(x_res)
+    }
+    return(x_res[tmin + n_ahead])
+  }
+
+  if(single.step) {
+    n_ahead <- 1
+    x_data <- c(x_train, x_eval)
+    if (nt + horizon > length(x_data)) horizon <- (length(x_eval) + 1)
+    
+    c <- model$c; m <- model$nReg
+    if (refit) {
+      fit_model <- EstimSETAR_m_postproc( EstimSETAR_m(x_data, p, d, c, m) )
+    } else {
+      fit_model <- model
+    }
+    
+    x_simulations <- matrix(rep(x_data[nt], Nboot), ncol=Nboot)
+    for (t in (nt + 1:horizon)) {
+      x_source <- x_data[1:(t - 1)]
+      x_simulations <- rbind(x_simulations, replicate(Nboot, 
+            predictions(x_source, eval.model=fit_model, tmin=(t - 1))
+      ))
+      x_res[t] <- mean(x_simulations[t - nt,])
+    }
+    x_pred <- x_res[nt + 1:horizon]
+  } else {
+    # === MULTISTEP ===
+    if (n_ahead == 1) n_ahead <- horizon
+
+    x_simulations <- replicate(Nboot, predictions(x_res))
+    x_sim_means <- rowMeans(x_simulations, na.rm=T)
+    x_pred <- x_sim_means[(nt - 1) + 1:n_ahead]
+  }
+      
+  # if not naive compute conf. intervals:
+  x_errors <- x_pred
+  if(type != "naive") {
+    x_errors <- t(apply(
+      x_simulations[(nt - 1) * (!single.step) + 1:horizon, ,drop=F], MARGIN=1, quantile, 
+      prob=sort(c(alpha, 1 - alpha)), na.rm=T))
+  }
+  
+  # compute prediction errors
+  MSE <- sum((x_eval[1:horizon] - x_pred)^2, na.rm=T) / horizon
+  # RMSE <- sqrt(MSE)
+
+  if(type == "naive"){
+    result <- list(pred=x_pred, MSE=MSE)
+  } else {
+    if (return.paths) result <- list(pred=x_pred, se=x_errors, MSE=MSE, alpha=alpha,
+                                     paths=x_simulations[(nt - 1) * (!single.step) + 1:horizon,])
+    else result <- list(pred=x_pred, se=x_errors, MSE=MSE, alpha=alpha)
+  }
+  
+  return(result)
+}
+```
+Now we test our prediction method on the data:
+```{r}
+n_ahead <- 10; precision <- 3;
+cat(paste0("naive (",n_ahead,"-step):\n"))
+c(xt[nt], round(PredictSETAR(model, x_train, x_eval, horizon=n_ahead)$pred, digits=precision))
+cat(paste0("Monte Carlo (",n_ahead,"-step):\n"))
+c(xt[nt], round(PredictSETAR(model, x_train, x_eval, type="MC", horizon=n_ahead)$pred, digits=precision))
+cat(paste0("Bootstrap (",n_ahead,"-step):\n"))
+c(xt[nt], round(PredictSETAR(model, x_train, x_eval, type="bootstrap", horizon=n_ahead)$pred, digits=precision))
+cat("data:\n"); xt[nt:(nt + n_ahead)]
+
+```
+```{r}
+cat("naive (1-step):\n")
+c(xt[nt], round(PredictSETAR(model, x_train, x_eval, single.step=T, horizon=n_ahead)$pred, digits=precision))
+cat("Monte Carlo (1-step):\n")
+c(xt[nt], round(PredictSETAR(model, x_train, x_eval, single.step=T, horizon=n_ahead, type="MC")$pred, digits=precision))
+cat("Bootstrap (1-step):\n")
+c(xt[nt], round(PredictSETAR(model, x_train, x_eval, single.step=T, horizon=n_ahead, type="bootstrap")$pred, digits=precision))
+cat("data:\n"); xt[nt:(nt + n_ahead)]
+```
+
+To test other prediction results, such as confidence intervals and simulation paths, we implement a plot procedure:
+
+```{r}
+predictSETAR_andPlot <- function(
+  model, time, x_train, x_eval, pred_type=c("naive", "MC", "bootstrap"), Nboot=100,
+  single.step=T, refit=F, plot.paths=T, print.rmse=T, alpha=0.2, plot.leg=F, legend.pos="top", plt_range=NA
+) {
+  pred_type <- match.arg(pred_type)
+  ne <- length(x_eval); nt <- length(x_train)
+  xt <- c(x_train, x_eval)
+  
+  if (pred_type == "naive" && plot.paths) plot.paths <- F # no reason to plot paths of a naive pred
+  if (single.step) { n_ahead <- 1 } else { n_ahead <- ne + 1} 
+
+  predict <- PredictSETAR(model, x_train, x_eval, single.step=single.step, Nboot=Nboot, n_ahead=n_ahead, 
+                          type=pred_type, return.paths=plot.paths, alpha=alpha, refit=refit)
+  x <- predict$pred
+  
+  err_low <- predict$se[,1]
+  err_high <- predict$se[,2]
+  
+  x_paths <- predict$paths
+  
+  history <- as.integer(0.02 * nt)
+  x_all <- c(xt, x, err_low, err_high, x_paths)
+  if (as.logical(sum(is.na(plt_range)))) {
+    plt_range <-  1.2 * c(min(x_all, na.rm=T), max(x_all, na.rm=T))
+  }
+  time_range <- (nt - history):(nt + ne)
+  pred_range <- 1:(ne + 1)
+  
+  c <- model$c
+
+  method_name <-  paste0(ifelse(single.step, "",
+    switch(pred_type, "naive" = "Naive", "MC" = "Monte Carlo", "bootstrap" = "Bootstrap")), 
+    " (", n_ahead, "-step) ", ifelse(plot.paths, "sim", ""), ifelse(print.rmse, paste("\n RMSE =", round(sqrt(predict$MSE), digits=4)), ""))
+  method_name_short <- paste0(ifelse(single.step,"", pred_type), " (", n_ahead, "-step) ")
+  
+  if (plot.leg) {
+    if (length(c) > 1) {
+      legend_names <- c("data", method_name_short, 
+                        ifelse(pred_type != "naive" && !single.step, paste0((1 - predict$alpha) * 100,"% conf.interval   "), NA), "c1", "c2", ifelse(plot.paths, "paths", NA))
+      legend_col <- c("black", "dodgerblue3", ifelse(pred_type != "naive" && !single.step, "dodgerblue2", NA), "brown3", "green3", ifelse(plot.paths, gray(0.6, alpha=0.2), NA))
+      legend_lty <- c(NA, 1, ifelse(pred_type != "naive" && !single.step, 2, NA), 2, 2, ifelse(plot.paths, 1, NA))
+      legend_pch <- c(1, NA, NA, NA, NA, NA)
+      legend_lwd <- c(2, 2, ifelse(pred_type != "naive" && !single.step, 2, NA), 2, 2, ifelse(plot.paths, 1, NA))
+    } else {
+      legend_names <- c("data", method_name_short, 
+                        ifelse(pred_type != "naive" && !single.step, paste0((1 - predict$alpha) * 100,"% conf.interval   "), NA), "c", ifelse(plot.paths, "paths", NA))
+      legend_col <- c("black", "dodgerblue3", ifelse(pred_type != "naive" && !single.step, "dodgerblue2", NA), "green3", ifelse(plot.paths, gray(0.6, alpha=0.2), NA))
+      legend_lty <- c(NA, 1, ifelse(pred_type != "naive" && !single.step, 2, NA), 2, ifelse(plot.paths, 1, NA))
+      legend_pch <- c(1, NA, NA, NA, NA)
+      legend_lwd <- c(2, 2, ifelse(pred_type != "naive" && !single.step, 2, NA), 2, ifelse(plot.paths, 1, NA))
+    }    
+  }
+  
+  plot(x=dat$time[time_range],y=xt[time_range], type="b", lwd=2,
+     ylim=plt_range, main=paste(model$name, method_name), xlab="t", ylab="x[%]")
+  # simulations
+  if (plot.paths) matlines(x=matrix(time[(nt - 1) + pred_range], byrow=T), y=x_paths, col=gray(0.6, alpha=0.2), lty=1)
+  # conf. interval fill
+  if (pred_type != "naive" && !single.step) {
+  polygon(
+    x=c(time[(nt - 1) + pred_range], rev(time[(nt - 1) + pred_range])), y=c(err_low[pred_range],rev(err_high[pred_range])), 
+        col=adjustcolor("dodgerblue2", alpha.f=0.3), border=F)      
+  }
+  # x
+  lines(x=time[(nt - 1) + pred_range], y=x[pred_range], col="dodgerblue3", lwd=2)
+  # conf. intervals
+  if (pred_type != "naive" && !single.step) {
+    lines(x=time[(nt - 1) + pred_range], y=err_low[pred_range], col="dodgerblue2", lwd=2, lty="dashed")
+    lines(x=time[(nt - 1) + pred_range], y=err_high[pred_range], col="dodgerblue2", lwd=2, lty="dashed")        
+  }
+  # thresholds
+  if (length(c) > 1) {
+    lines(x=c(time[(nt-history)], time[(nt + ne)]), y=c(c[1],c[1]), col="brown3", lty="dashed", lwd=2)
+    lines(x=c(time[(nt-history)], time[(nt + ne)]), y=c(c[2],c[2]), col="green3", lty="dashed", lwd=2)      
+  } else {
+    lines(x=c(time[(nt-history)], time[(nt + ne)]), y=c(c,c), col="green3", lty="dashed", lwd=2)
+  }
+  if (plot.leg) {
+    legend(legend.pos, horiz=T, legend=legend_names, 
+           col=legend_col, 
+           lty=legend_lty, 
+           pch=legend_pch, lwd=legend_lwd, cex=0.8)    
+  }
+}
+```
+```{r predictPlot1, fig.width=10, fig.height=4}
+par(mfrow=c(1, 1))
+predictSETAR_andPlot(
+  models[[ orders[6] ]], time=dat$time, x_train=x_train, x_eval=x_eval, 
+  pred_type="MC", single.step=T, plot.paths=F, plot.leg=T)
+
+predictSETAR_andPlot(
+  models[[ orders[6] ]], time=dat$time, x_train=x_train, x_eval=x_eval, 
+  pred_type="MC", single.step=F, plot.paths=T, plot.leg=T, plt_range=c(-2,6))
+```
+Now we possess all necessary tools to proceed evaluating our SETAR models according to their predictive abilities.
+
+### 5.2 Single-Step Predictions of SETAR Models
+
+```{r singleStepNaivePlots, fig.width=11, fig.height=4}
+par(mfrow=c(1, 2))
+for (i in 1:12) {
+  predictSETAR_andPlot(
+  models[[ orders[i] ]], time=dat$time, x_train=x_train, x_eval=x_eval, 
+  refit=T, single.step=T, plot.paths=F)
+}
+```
+
+### 5.3 Multi-Step Predictions of SETAR Models
+
+#### Monte Carlo:
+
+```{r multiStepMCPlots, fig.width=11, fig.height=3.6}
+par(mfrow=c(1, 2))
+for (i in 1:12) {
+  predictSETAR_andPlot(
+  models[[ orders[i] ]], time=dat$time, x_train=x_train, x_eval=x_eval, 
+  pred_type="MC", single.step=F, plot.paths=T, Nboot=200)
+}
+```
+
+#### Bootstrap:
+
+```{r multiStepBootPlots, fig.width=11, fig.height=3.6}
+par(mfrow=c(1, 2))
+for (i in 1:12) {
+  predictSETAR_andPlot(
+  models[[ orders[i] ]], time=dat$time, x_train=x_train, x_eval=x_eval, 
+  pred_type="bootstrap", single.step=F, plot.paths=T)
+}
+```
+
+### 5.4 Evaluating Models
+
+From what we observe, some models exhibit explosive properties, and have equilibria significantly distant from the evaluated data set, which,
+of course, impacts the resulting prediction error. Now we evaluate models according to their predictive properties, and filter out those that
+produce distant and/or explosive predictions.
+
+```{r}
+Nb = 100
+se_factor <- 4; se_factor_multi <- 8;
+model_cols_mse <- cbind(model_cols, sigmaSq=rep(0, 12), 
+                        MSE_1step=rep(0, 12), div=rep("", 12), 
+                        MSE_MC=rep(0, 12), div=rep("", 12),
+                        MSE_boot=rep(0, 12), div=rep("",12), stringsAsFactors=F)
+for (i in 1:12) {
+  # i <- 4
+  model <- models[[ orders[i] ]];
+  # prediction errors have to be computed again since passing model to predictSETAR_andPlot does not
+  # pass reference, only a copy
+  predict1_naive <- PredictSETAR(model, x_train, x_eval, single.step=T, type="naive", return.paths=F)
+  predict_mc <- PredictSETAR(model, x_train, x_eval, single.step=F, type="MC", return.paths=F, Nboot=Nb)
+  predict_boot <- PredictSETAR(model, x_train, x_eval, single.step=F, type="bootstrap", return.paths=F, Nboot=Nb)
+  model$mse_naive <- predict1_naive$MSE; model$mse_mc <- predict_mc$MSE; model$mse_boot <- predict_boot$MSE
+  
+  divergent1 <- se_factor * model$resSigmaSq < predict1_naive$MSE
+  divergent2 <- se_factor_multi * predict1_naive$MSE < predict_mc$MSE
+  divergent3 <- se_factor_multi * predict1_naive$MSE < predict_boot$MSE
+  
+  model_cols_mse[i, 3] <- round(model$resSigmaSq, digits=4); # fill in rss
+  model_cols_mse[i, 4] <- round(predict1_naive$MSE, digits=4);
+  model_cols_mse[i, 5] <- ifelse(divergent1, "~","");
+  model_cols_mse[i, 6] <- round(predict_mc$MSE, digits=4);
+  model_cols_mse[i, 7] <- ifelse(divergent2, "~","");
+  model_cols_mse[i, 8] <- round(predict_boot$MSE, digits=4);
+  model_cols_mse[i, 9] <- ifelse(divergent3, "~",""); 
+}
+names(model_cols_mse) <- c("model", "BIC", "sigmaSq", "MSE(1-step)","","MSE(MC)","","MSE(boot)","")
+model_cols_mse
+```
+
+We notice that models that quickly diverge have a significantly higher $MSE$ than their $\hat\sigma_{\varepsilon}^2$ (`RSS / (n - k)`). 
+One could then formulate a condition that model is "too divergent" if its training data $MSE$ (`RSS / (n - k)`) is significantly lower 
+than prediction $MSE$. The significance factor could be taken, for example, as `r se_factor`, i.e.: if the prediction $MSE$ exceeds `r se_factor`-multiple 
+of training data `RSS / (n - k)`, the prediction diverges. In the above table, we mark divergent predictions with `"~"`. When examining multi-step predictions
+we take a factor of `r se_factor_multi` of 1-step $MSE$.
+
+### 5.5 Conclusion and SETAR Evaluation
+
+After considering all possible configurations of SETAR models, testing them for remaining nonlinearity, and evaluating their predictive properties,
+we conclude the following:
+
+Some models placed within the top 3 best in their fit onto the training data (according to their $BIC$), contained SETAR3-type remaining nonlinearity, 
+and thus had their thresholds estimated, turned out to have radically different equilibria than their 2-regime predecessors. Some were even explosive when
+we examined their predictive properties. Hence their training data fit quality cannot justify their mismatch between data and their properties as stochastic
+dynamical systems.
+
+With regards to their predictive properties, we pick the best models according to their given $MSE$ depending on the prediction method (`"naive"`, `"mc"`, `"boot"`):
+
+```{r}
+cat("Models sorted by 1-step naive MSE:\n")
+non_divergent <- model_cols_mse[which( sapply(1:12, function(i) nchar(gsub(" ", "", model_cols_mse[i, 5])) == 0) ), ]
+mse_naive_orders <- order(non_divergent[, 4])
+mse_naive_cols <- non_divergent[mse_naive_orders, ]
+mse_naive_cols[, 1:4]
+```
+
+```{r}
+cat("Models sorted by Monte Carlo MSE:\n")
+non_divergent <- model_cols_mse[which( sapply(1:12, function(i) nchar(gsub(" ", "", model_cols_mse[i, 7])) == 0) ), ]
+mse_mc_orders <- order(non_divergent[, 6])
+mse_mc_cols <- non_divergent[mse_mc_orders, ]
+cbind(mse_mc_cols[, 1:3], MSE_mc=mse_mc_cols[, 6])
+```
+
+```{r}
+cat("Models sorted by Bootstrap MSE:\n")
+non_divergent <- model_cols_mse[which( sapply(1:12, function(i) nchar(gsub(" ", "", model_cols_mse[i, 9])) == 0) ), ]
+mse_boot_orders <- order(non_divergent[, 8])
+mse_boot_cols <- non_divergent[mse_mc_orders, ]
+cbind(mse_boot_cols[, 1:3], MSE_boot=mse_boot_cols[, 8])
+```
+
+and as we observe, the order of the first 4 models remains the same regardless of the prediction method.
+
+## 6. STAR Model Estimation
+
+While SETAR-type models are governed by a discontinuous transition function (`Indicator`), we have not yet tried a continuous alternative
+of transitioning between regimes. STAR (Smooth Threshold AutoRegressive) models utilize the possibility of a smooth regime transition. As will
+the context of the following sections suggest, we can choose a particular transition function between exponential (ESTAR) and logistic (LSTAR) and
+a scalar parameter $\gamma$ which describes the "smoothness" of a regime transition. For $\gamma \rightarrow \infty$ we obtain a discontinuous step-like
+transition function, as in SETAR's indicator.
+
+### 6.1 Tests For STAR-type nonlinearity
+
+To test for STAR-type nonlinearity we use a specialized form of an LM test.
+
+```{r}
+LMtest_LINvsSTAR <- function(x, p, d, alpha=0.05, alternative=c("LSTAR","ESTAR")) {
+  x <- as.ts(x)  # if x is not a ts object
+  tmp <- c(  # list of delayed ts
+    list(x),
+    lapply(1:p, function(i) lag(x, -i))
+  )
+  tmp <- do.call(function(...) ts.intersect(..., dframe=T), tmp)
+  names(tmp) <- c("x", paste0("x",1:p))
+  y <- lm(x ~ ., data=tmp)$residuals 
+  y <- c(rep(NA, p), y)
+  attributes(y) <- attributes(x)  # make y the same ts object as x
+  tmp <- c(  
+    list(y),
+    lapply(1:p, function(i) stats::lag(x, -i)),  # lag shifts forward, therefore the minus operator
+    lapply(1:p, function(i) stats::lag(x, -i)*stats::lag(x,-d)),
+    lapply(1:p, function(i) stats::lag(x, -i)*stats::lag(x,-d)^2)
+  )
+  switch(alternative[1],
+         LSTAR = {
+           tmp <- c(tmp, lapply(1:p, function(i) stats::lag(x, -i)*stats::lag(x,-d)^3) )
+           df <- 3*p
+         },
+         ESTAR = { df <- 2*p }
+  )
+  tmp <- do.call(function(...) ts.intersect(..., dframe=T), tmp)
+  names(tmp)[1] <- "y"  # enough to label the first column (response)
+  z <- lm(y ~ ., data=tmp)$residuals
+  LM <- length(x) * (1 - sum(z^2)/sum(y^2, na.rm=T))
+  c(LM=LM, crit_val=qchisq(1-alpha, df=df), p_value=1-pchisq(LM, df=df))
+}
+```
+ 
+```{r starLM_example}
+# LMtest_LINvsSTAR(xt, p=3, d=1, alternative = "LSTAR")
+# LMtest_LINvsSTAR(xt, p=3, d=1, alternative = "ESTAR")
+```
+
+To decide whether an exponential or a logistic transition function provides a better fit, we test for the last 
+parameter vector of a regression test from `LMtest_LINvsSTAR` is zero. By accepting the hypothesis, we conclude that
+exponential transition fits our data better.
+```{r expVsLogTest}
+LMtest_EvsL <- function(x, p, d, alpha=0.05) {
+  x <- as.ts(x)  # if x is not a ts object
+  tmp <- c(  # list of delayed ts
+    list(x),
+    lapply(1:p, function(i) stats::lag(x, -i))
+  )
+  tmp <- do.call(function(...) ts.intersect(..., dframe = T), tmp)
+  names(tmp) <- c("x", paste0("x", 1:p))
+  y <- lm(x ~ ., data = tmp)$residuals
+  y <- c(rep(NA, p), y)
+  attributes(y) <- attributes(x)  # make y the same ts object as x
+  tmp <- c(
+    list(y),
+    lapply(1:p, function(i) stats::lag(x, -i)),  # lag shifts forward, therefore the minus operator
+    lapply(1:p, function(i) stats::lag(x, -i) * stats::lag(x, -d)),
+    lapply(1:p, function(i) stats::lag(x, -i) * stats::lag(x, -d)^2)
+  )
+  
+  # === ESTAR regression ========
+  tmp <- do.call(function(...) ts.intersect(..., dframe = T), tmp)
+  names(tmp)[1] <- "y"
+  res_E <- lm(y ~ ., data = tmp)$residuals
+  
+  # === LSTAR regression ========
+  tmp <- c(tmp, lapply(1:p, function(i) stats::lag(x, -i) * stats::lag(x, -d)^3) )
+  tmp <- do.call(function(...) ts.intersect(..., dframe = T), tmp)
+  names(tmp)[1] <- "y"
+  res_L <- lm(y ~ ., data = tmp)$residuals
+  
+  LM <- length(x) * (1 - sum(res_L^2) / sum(res_E^2))
+  c(LM = LM, crit_val = qchisq(1 - alpha, df = p), p_value = 1 - pchisq(LM, df = p), alpha_corrected = alpha / p)
+}
+
+# LMtest_EvsL(xt, p=3, d=1)
+```
+The statistic of an LM test is assumed to be of $\chi^2(p)$ distribution. This means that the p-value
+of the test has to be compared with a significance factor normalized by the parameter vector's dimension, i.e.:
+$\text{p-val} < \alpha/p$ (Bonferoni correction). Hence the `alpha_corrected` value.
+
+Naturally, we need to test for STAR-type non-linearity for an array of discrete parameters $p$ and $d$. The delay
+parameter $d$ is, of course, bounded by the lag parameter $p$, the upper bound of which can be assumed from the partial
+autocorrelation of the series:
+
+```{r seriesPACF1, fig.width=9, fig.height=3.6}
+# par(mfrow=c(1, 2))
+acf(xt, lag.max=20, type="partial")
+pmax <- 12
+```
+
+Since partial autocorrelation dies out after 2 lag steps, we should limit the sample space by $p_{max}=2$, however to show
+a reasonably large sample, we follow an assumption that $p_{max}=12$:
+
+```{r}
+starTest <- list()
+results <- sapply(1:pmax, function(p) 
+  sapply(1:p, function(d)
+    c(p = p, d = d, LMtest_LINvsSTAR(xt, p, d, alt = "LSTAR")["p_value"], crit = alpha / (3 * p))
+  )
+)
+results <- data.frame(t(do.call(cbind, results)))
+cat("LSTAR non-linearity test results (linearity rejected):\n")
+( starTest$LSTARs <- results[results$p_value < results$crit, ] )
+
+```
+```{r}
+results <- sapply(1:pmax, function(p) 
+  sapply(1:p, function(d)
+    c(p = p, d = d, LMtest_LINvsSTAR(xt, p, d, alt = "ESTAR")["p_value"], crit = alpha / (3 * p))
+  )
+)
+results <- data.frame(t(do.call(cbind, results)))
+cat("ESTAR non-linearity test results (linearity rejected):\n")
+( starTest$ESTARs <- results[results$p_value < results$crit, ] )
+```
+
+Tests show a clear LSTAR preference, with an overlap with ESTAR nonlinearity for $p=2$. 
+
+```{r}
+( starTest <- list(LSTARs=starTest$LSTARs[, 1:2], ESTARs=starTest$ESTARs[, 1:2]) )
+```
+
+The parameter intersection between the above samples should also be examined for preference, using our
+ESTAR vs LSTAR test:
+
+```{r}
+( inters <- dplyr::intersect(starTest$LSTARs, starTest$ESTARs) %>%
+  apply(MARGIN=1, FUN=function(x) c(x, round(LMtest_EvsL(xt, p=x[1], d=x[2]), digits=4)) ) %>% t() )
+
+cat("\n ESTAR preference: \n")
+epref <- inters[which(inters[, 5] < inters[, 6]), ]
+ifelse(length(epref), epref, NA)
+```
+
+Which suggests that we ought to consider only LSTAR models.
+
+### 6.2 Estimating STAR Model Parameters
+
+First, we implement and test all necessary functions (for $m$ regimes).
+
+#### Regime Transition
+
+We distinguish logistic $G_L$ and exponential $G_E$ transition functions:
+$$
+G_L(z_t, c, \gamma) = \frac{1}{1 + \text{e}^{-\gamma(z_t - c)}} \qquad G_E(z_t, c, \gamma) = 1 - \text{e}^{-\gamma (z_t - c)^2}
+$$
+parametrized by a smoothing parameter $\gamma \in \mathbb{R}^{m-1}$ (for $m > 1$ all products are direct vector products).
+```{r transFunDef}
+SmoothTransition <- function(x, c, gamma, type=c("logistic","exponential")) {
+  switch(type,
+         logistic = {1 / (1 + exp(-gamma * (x - c)))},
+         exponential = {1 - exp(-gamma * (x - c)^2)}
+  )
+}
+
+# SmoothTransition(0.3, c=0.2, gamma=10, type="logistic")
+# SmoothTransition(0.3, c=c(-0.1, 0.2), gamma=c(1, 5), type="logistic")
+```
+
+#### Single Regime Basis
+
+$$
+Y_t = (1, X_{t-1},...,X_{t-p})^{\top}
+$$
+
+```{r basisFuncDef}
+Yt <- function(x, t, p) c(1, x[(t-1):(t-p)])
+
+# Yt(xt, t=3, p=2)
+```
+
+#### $m$-Regime Basis
+
+$$
+X^{(m)}_t = \big((1 - G(z_t,c_1,\gamma_1))Y_t \ , \ \ (G(z_t, c_1, \gamma_1) - G(z_t, c_2, \gamma_2)) Y_t \ , \ ... \ , G(z_t, c_{m-1}, \gamma_{m-1})Y_t \big)^{\top}
+$$
+
+```{r mregBasisDef}
+Xt_m <- function(x, t, p, d, c, gamma, m=2, z = x, type=c("logistic", "exponential")) {
+  type <- match.arg(type)
+  I <- SmoothTransition(z[t - d], c, gamma, type)
+  Y <- Yt(x, t, p)
+  as.numeric(sapply(1:m, function(j) (ifelse(j == 1, 1, I[j - 1]) - ifelse(j == m, 0, I[j])) * Y))
+}
+
+# Xt_m(xt, t=3, p=2, d=1, c=0.2, gamma=10)
+# Xt_m(xt, t=3, p=2, d=1, c=c(-0.1, 0.2), gamma=c(1, 5), m=3)
+
+```
+
+#### Skeleton
+$$
+F(z_t, \theta) = (\phi^{(+)} - \phi^{(-)})X^{(m)}_t \ , \qquad \phi^{(+)} = (\phi_1, ..., \phi_m)^{\top} , \phi^{(-)} = (\textbf{0}_{(p+1)\times 1}, ..., \phi_{m-1})^{\top}
+$$
+where $\theta = (\phi_1, ... , \phi_m, c, \gamma)^{\top}$, and $\dim{\theta} = m(p+1)+2(m-1)$.
+```{r mRegSTARSkel}
+skelSTAR_m <- function(x, t, p, d, c, gamma, PhiParams, m=2, z = x, type = c("logistic", "exponential")) {
+  type <- match.arg(type)
+  c(PhiParams %*% Xt_m(x, t, p, d, c, gamma, m, z, type)) 
+}
+
+# skelSTAR_m(xt, t=10, p=2, d=1, c=0.2, gamma=1, PhiParams=rep(1, 6))
+# skelSTAR_m(xt, t=10, p=2, d=1, c=c(-0.1, 0.2), gamma=c(1, 5), PhiParams=rep(1, 9), m=3)
+```
+
+#### Information Criteria
+$$
+AIC_{STAR} = -2 \ l(\theta) + 2 \dim{\theta} \ , \quad BIC_{STAR} = -2 \ l(\theta) + \dim{\theta} \log{n}
+$$
+where $l(\theta) = -\frac{n}{2} \log{\frac{2\pi}{\sigma_{\varepsilon}^2}} - \frac{1}{2}(n - p)$ is the log-likelihood function.
+```{r infCritDef}
+IC <- function(n, p, sigmaSq, m=2) {
+  lik <- -n * log(2 * pi / sigmaSq) / 2 - (n - p) / 2
+  npar <- m * (p + 1) + 2 * (m - 1)
+  c(AIC= -2 * lik + 2 * npar, BIC= - 2 * lik + log(n) * npar)
+} 
+
+# IC(n=length(xt), p=2, sigmaSq=0.027)
+# IC(n=length(xt), p=2, sigmaSq=0.027, m=3)
+```
+
+#### Parameter Estimation
+
+The initial estimation of a STAR model candidate follows the same pattern as estimation methods in sections 2.2 and 4.3:
+
+```{r}
+# test for packages
+suppressMessages(pkgTest("zeallot"))
+suppressMessages(pkgTest("matlib"))
+```
+
+```{r mEstimSTARDef}
+EstimSTAR_m <- function(x, p, d, c, gamma, m=2, type=c("logistic", "exponential")) {
+  type <- match.arg(type)
+  m = as.integer(m)
+  if (m <= 0) {
+    message("Error: regime count m has to be a positive integer")
+    return(NA)
+  }
+  if (length(c) != m - 1) {
+    message("Error: Incompatible dimensions of threshold vector and regime count.");
+    return(NA)
+  }
+  
+  resultModel <- list()
+  cPrint <- round(c, digits=3); gammaPrint <- round(gamma, digits=3) # 3 dec. places seems enough
+  resultModel$name <- paste0(ifelse(type == "logistic", "L", "E"),
+                "STAR(", p, ",", d, ",", 
+                paste(na.omit(cPrint), collapse=','),",", 
+                paste(na.omit(gammaPrint), collapse=','), ")")
+  resultModel$nReg <- m; resultModel$type <- type
+  resultModel$p = p; resultModel$d = d; 
+  resultModel$c = c; resultModel$gamma = gamma;
+  resultModel$data = x; n = length(x); resultModel$n = n;
+  
+  X <- as.matrix(apply(as.matrix((p + 1):n), MARGIN=1, function(t) Xt_m(x, t, p, d, c, gamma, m) ))
+  y <- as.matrix(x[(p + 1):n])
+  K <- crossprod(t(X), t(X)); b <- crossprod(t(X), y);
+  detK <- abs(det(K))
+  
+  if (detK < 0.000001) {
+    return(NA)
+  } else {
+    K <- inv(K)
+    sol_phi <- as.numeric(t(K %*% b)) # solving (X'X)*phi = X'y
+    # resultModel$PhiStErrors <- solution[,2] # standard errors
+    skel <- crossprod(X, sol_phi); resultModel$skel <- skel;
+    resultModel$residuals <- (y - skel)
+    resultModel$resSigmaSq <- 1 / (n - p) * sum(resultModel$residuals^2)
+    resultModel$PhiParams <- sol_phi
+
+    return(resultModel)
+  }
+}
+
+# str( EstimSTAR_m(xt, p=2, d=2, c=0, gamma=10) ) # 2 regimes
+# str( EstimSTAR_m(xt, p=2, d=2, c=c(0, 0.2), gamma=c(10, 12), m=3) ) # 3 regimes
+```
+
+#### Estimating Standard Errors of STAR Parameters
+
+Notice, that we can no longer find a consitent estimate of parameter variances from the AR covariance matrix alone. 
+Individual regimes are interdependent thanks to smooth transition functions. We will need to find an estimate of a covariance matrix $\boldsymbol{\Sigma}_{\hat\theta}$ of
+all parameters $\theta = (\phi_1,\phi_2,...,\phi_m,\gamma_1,...,\gamma_{m-1},c_1,...,c_{m-1})^{\top}$ (where $m$ is the number of regimes). Under our given conditions, the least square
+estimate $\hat\theta$ of $\theta$ is asymptotically normally distributed, i.e.: $\sqrt{n}(\hat\theta - \theta) \sim N(\textbf{0}, n\boldsymbol{\Sigma}_{\hat\theta})$ for $n \rightarrow \infty$. Where a consitent estimate of the covariance matrix is given by $\hat{\boldsymbol{\Sigma}}_{\hat\theta} = \frac{1}{n}\hat{\textbf{H}}_n^{-1}\hat{\textbf{M}}_n\hat{\textbf{H}}_n^{-1}$, where $\hat{\textbf{H}}_n = \frac{1}{n - p}\sum_{t=p+1}^{n}\nabla^2r_t(\hat\theta)$ is the mean Hessian, $\hat{\textbf{M}}_n = \frac{1}{n - p}\sum_{t=p+1}^{n}\nabla r_t(\hat\theta) \nabla r_t(\hat\theta)^{\top}$ the mean information matrix, and $r_t(\theta)=\big(x_t - F(x_{t-d},\theta) \big)^2$ ($F$ is the model skeleton).
+
+Given the dimensions of our model ($m$ - number of regimes, $p$ - AR parameter lag), we obtain symmetrical square matrices of dimension $\dim{\theta} \times \dim{\theta}$, where $\dim{\theta} = m (p + 1)+2(m-1)$. Both $\big( r_t(\hat\theta) \nabla r_t(\hat\theta)^{\top} \big)_{\dim{\theta} \times \dim{\theta}}$ and $\big( \nabla^2r_t(\hat\theta) \big)_{\dim{\theta} \times \dim{\theta}}$ have to be computed for each $t = p + 1,...,n$. Differentiating $r_t$ with respect to its parameters we get $\frac{\partial r_t}{\partial \theta_i} = 2 (F_t - x_t)\frac{\partial F_t}{\partial \theta_i} = (\nabla r_t)_i$ and $\frac{\partial^2 r_t}{\partial \theta_i \partial \theta_j} = 2 \bigg( \frac{\partial F_t}{\partial \theta_i} \frac{\partial F_t}{\partial \theta_j} + (F_t - x_t)\frac{\partial^2 F_t}{\partial \theta_i \partial \theta_j} \bigg) = (\nabla^2 r_t)_{i,j}$. The respective derivatives of skeleton $F_t$ are elements of a gradient vector $(\nabla F_t)_{\dim{\theta}}$ and Hessian $(\nabla^2 F_t)_{\dim{\theta} \times \dim{\theta}}$. It suffices to compute the elements of $\nabla F_t$ and $\nabla^2 F_t$ to estimate the mean residual square (` rs `) Hessian and information matrix, and use the above formulas.
+
+The skeleton gradient and Hessian can be divided into sub-matrices according to the differentiated variable:
+
+$$
+\nabla F_t = 
+\begin{pmatrix}
+\nabla_{\boldsymbol{\phi}}F_t \\
+\nabla_{\boldsymbol{\gamma}}F_t \\
+\nabla_{\boldsymbol{c}}F_t
+\end{pmatrix} \ , \quad \boldsymbol{\phi} = (\phi_1,...,\phi_m)^{\top} \ , \ \boldsymbol{\gamma} = (\gamma_1,...,\gamma_{m-1})^{\top} \ , \ \boldsymbol{c} = (c_1,...,c_{m-1})^{\top}
+$$
+
+$$
+\nabla^2 F_t = 
+\begin{pmatrix}
+\nabla_{\boldsymbol{\phi}, \boldsymbol{\phi}}^2 F_t & \nabla_{\boldsymbol{\phi},\boldsymbol{\gamma}}^2 F_t & \nabla_{\boldsymbol{\phi},\boldsymbol{c}}^2 F_t \\
+(\nabla_{\boldsymbol{\phi},\boldsymbol{\gamma}}^2  F_t)^{\top} & \nabla_{\boldsymbol{\gamma}, \boldsymbol{\gamma}}^2 F_t & \nabla_{\boldsymbol{\gamma},\boldsymbol{c}}^2 F_t \\
+(\nabla_{\boldsymbol{\phi},\boldsymbol{c}}^2 F_t)^{\top} & (\nabla_{\boldsymbol{\gamma},\boldsymbol{c}}^2 F_t)^{\top} & \nabla_{\boldsymbol{c}, \boldsymbol{c}}^2 F_t
+\end{pmatrix}
+$$
+
+Now take $\boldsymbol{\phi}^{(+)} = \boldsymbol{\phi}$ and $\boldsymbol{\phi}^{(-)} = ( \textbf{0}_{(p+1)\times 1}, \phi_1,...,\phi_{m-1})^{\top}$, and also create a transition vector $\boldsymbol{G}_t = (1, G(x_{t-d},\gamma_1,c_1), ..., G(x_{t-d},\gamma_{m-1},c_{m-1}))^{\top}$. Then the skeleton can be expressed as:
+
+$$
+F_t = \boldsymbol{G}_t^{\top}(\boldsymbol{\phi}^{(+)} - \boldsymbol{\phi}^{(-)})\boldsymbol{Y}_t
+$$
+ We notice that since parameters $\phi_{j,i}$ are linear, we get $\nabla_{\boldsymbol{\phi}, \boldsymbol{\phi}}^2 F_t = \textbf{0}_{m(p+1) \times m(p+1)}$. Similarly, we can then fill in the remaining derivatives:
+ 
+$$
+\nabla_{\boldsymbol{\phi}}F_t = \begin{pmatrix}
+(1 - G(x_{t-d},\gamma_1, c_1)) \boldsymbol{Y}_t \\
+(G(x_{t-d},\gamma_1, c_1) - G(x_{t-d},\gamma_2, c_2)) \boldsymbol{Y}_t \\
+\vdots \\
+(G(x_{t-d},\gamma_{m-1}, c_{m-1}) - 0) \boldsymbol{Y}_t
+\end{pmatrix} \ , \
+\nabla_{\boldsymbol{\gamma}}F_t = \begin{pmatrix}
+\frac{\partial G}{\partial \gamma_1}(x_{t-d},\gamma_{1}, c_{1})(\phi_2-\phi_1)^{\top} \boldsymbol{Y}_t \\
+\frac{\partial G}{\partial \gamma_2}(x_{t-d},\gamma_{2}, c_{2})(\phi_3-\phi_2)^{\top} \boldsymbol{Y}_t \\
+\vdots \\
+\frac{\partial G}{\partial \gamma_{m-1}}(x_{t-d},\gamma_{m-1}, c_{m-1})(\phi_{m}-\phi_{m-1})^{\top} \boldsymbol{Y}_t \\
+\end{pmatrix}
+$$
+$$
+\nabla_{\boldsymbol{c}}F_t = \begin{pmatrix}
+\vdots \\
+\text{analogously to } \nabla_{\boldsymbol{\gamma}} \\
+\vdots
+\end{pmatrix}
+$$
+ 
+$$
+\nabla_{\boldsymbol{\phi},\boldsymbol{\gamma}}^2 F_t = \begin{pmatrix}
+-\frac{\partial (\boldsymbol{G}_t)_2}{\partial \gamma_1} \boldsymbol{Y}_t & \textbf{0}_{(p+1)\times 1} & ... & \textbf{0}_{(p+1)\times 1} \\
+\frac{\partial (\boldsymbol{G}_t)_2}{\partial \gamma_1} \boldsymbol{Y}_t & -\frac{\partial (\boldsymbol{G}_t)_3}{\partial \gamma_2} \boldsymbol{Y}_t & ... & \textbf{0}_{(p+1)\times 1}  \\
+\textbf{0}_{(p+1)\times 1} & \frac{\partial (\boldsymbol{G}_t)_3}{\partial \gamma_2} \boldsymbol{Y}_t & ... & \textbf{0}_{(p+1)\times 1} \\
+\vdots & \vdots & \ddots & \vdots \\
+\textbf{0}_{(p+1)\times 1} & \textbf{0}_{(p+1)\times 1} & ... & -\frac{\partial (\boldsymbol{G}_t)_{m}}{\partial \gamma_{m-1}} \boldsymbol{Y}_t \\
+\textbf{0}_{(p+1)\times 1} & \textbf{0}_{(p+1)\times 1} & ... & \frac{\partial (\boldsymbol{G}_t)_{m}}{\partial \gamma_{m-1}} \boldsymbol{Y}_t 
+\end{pmatrix} \ , \
+\nabla_{\boldsymbol{\phi},\boldsymbol{c}}^2 F_t = \begin{pmatrix}
+\vdots \\
+... \ \text{analogously to } \nabla_{\boldsymbol{\phi},\boldsymbol{\gamma}}^2 \ ... \\
+\vdots
+\end{pmatrix}
+$$
+ 
+$$
+\nabla_{\boldsymbol{\gamma}, \boldsymbol{\gamma}}^2 F_t = \text{diag}\bigg( \frac{\partial G}{\partial \gamma_1}(x_{t-d},\gamma_1,c_1)(\phi_2 - \phi_1)^{\top}\boldsymbol{Y}_t, ... , \frac{\partial G}{\partial \gamma_{m-1}}(x_{t-d},\gamma_{m-1},c_{m-1})(\phi_{m} - \phi_{m-1})^{\top}\boldsymbol{Y}_t \bigg)
+$$
+
+$$
+\nabla_{\boldsymbol{c}, \boldsymbol{c}}^2 F_t \ \text{ and } \ \nabla_{\boldsymbol{\gamma}, \boldsymbol{c}}^2 F_t = \text{diag}\big( \ ... \ \text{analogously to }\nabla_{\boldsymbol{\gamma}, \boldsymbol{\gamma}}^2 \ ... \ \big)
+$$
+ 
+ Note that all matrices marked with "$\text{analogously to...}$" contain their respective derivatives of the transition function $G$. These will be filled in according
+ to its respective type (logistic, exponential):
+ 
+$$
+\begin{matrix}
+G_E(x_{t-d},\gamma,c) = 1 - \text{e}^{-\gamma(x_{t-d}-c)^2} & & &  G_L(x_{t-d},\gamma,c) = \frac{1}{1 + \text{e}^{-\gamma(x_{t-d}-c)}}
+\\ \\
+\frac{\partial G_E}{\partial \gamma} = \text{e}^{-\gamma(c - x_{t-d})^2} (c - x_{t-d})^2 & & & \frac{\partial G_L}{\partial \gamma} = \frac{\text{e}^{-\gamma(x_{t-d}-c)}(x_{t-d}-c)}{\big(1 + \text{e}^{-\gamma(x_{t-d}-c)} \big)^2}
+\\ \\
+\frac{\partial G_E}{\partial c} = 2\text{e}^{-\gamma(c - x_{t-d})^2} \gamma (c - x_{t-d}) & & & \frac{\partial G_L}{\partial c} = -\frac{\gamma\text{e}^{-\gamma(x_{t-d}-c)}}{\big(\text{e}^{c \gamma} + \text{e}^{\gamma x_{t-d}} \big)^2}
+\\ \\
+\frac{\partial^2 G_E}{\partial \gamma \partial c} = -2\text{e}^{-\gamma(c - x_{t-d})^2}(c - x_{t-d})(c^2 \gamma - 2 c x_{t-d} + \gamma x_{t-d}^2 \gamma - 1) & & & \frac{\partial^2 G_L}{\partial \gamma \partial c} = -\frac{\text{e}^{\gamma(x_{t-d} - c)}(1 - c \gamma + x_{t-d} \gamma + \text{e}^{\gamma(x_{t-d} - c)}(1 + c\gamma - x_{t-d} \gamma))}{(1 + \text{e}^{\gamma(x_{t-d}-c)})^3}
+\\ \\
+\frac{\partial^2 G_E}{\partial c^2} = -2 \text{e}^{-\gamma (c - x_{t-d})^2} \gamma (2 c^2 \gamma - 4 c x_{t-d} \gamma + 2 x_{t-d}^2 \gamma - 1) & & & \frac{\partial^2 G_L}{\partial c^2} = \frac{\text{e}^{\gamma(x_{t-d}+c)}\gamma^2 (\text{e}^{c \gamma} - \text{e}^{x_{t-d} \gamma})}{(\text{e}^{c \gamma} + \text{e}^{x_{t-d} \gamma})^3}
+\\ \\
+\frac{\partial^2 G_E}{\partial \gamma^2} = -\text{e}^{-\gamma(c-x_{t-d})^2}(c - x_{t-d})^4 & & & \frac{\text{e}^{\gamma(c+x_{t-d})}(c - x_{t-d})^2(\text{e}^{c \gamma} - \text{e}^{x_{t-d} \gamma}))}{(\text{e}^{c \gamma} + \text{e}^{x_{t-d} \gamma})^3}
+\end{matrix}
+$$
+
+```{r stdErrEstim}
+# ==== estimate standard errors of STAR parms: (Phi, gamma, c) ====
+starParamCovMatrix <- function(x, p, d, res, Phi, gamma, c, z=x, m=2, type=c("logistic", "exponential")) {
+  # implementing this was tedious, and I can only test the symmetry of the result matrix
+  type <- match.arg(type)
+  n <- length(x); k <- p; times <- (k + 1):n;
+  
+  Phi <- matrix(Phi, nrow=m, byrow=T)
+  # transition derivatives
+  # === the following arrays are (m - 1)x(n - k) matrices ====
+  G <- sapply(times, function(t) SmoothTransition(z[t - d], c, gamma, type))
+  if (type == "exponential") {
+    dG_dgamma <- sapply(times, function(t) exp(-gamma * (c - z[t - d])^2) * (c - z[t - d])^2)
+  } else {
+    dG_dgamma <- sapply(times, function(t) exp(gamma * (z[t - d] - c)) * (z[t - d] - c) /
+                          (1 + exp(gamma * (z[t - d] - c)))^2)
+  }
+  if (type == "exponential") {
+    dG_dc <- sapply(times, function(t) 2 * gamma * (c - z[t - d]) * exp(-gamma * (c - z[t - d])^2))
+  } else {
+    dG_dc <- sapply(times, function(t) -gamma * exp(gamma * (z[t - d] + c)) / 
+                      (exp(c * gamma) + exp(gamma * z[t - d]))^2)
+  }
+  if (type == "exponential") {
+    d2G_dgamma2 <- sapply(times, function(t) -exp(-gamma * (c - z[t - d])^2) * (c - z[t - d])^4)
+  } else {
+    d2G_dgamma2 <- sapply(times, function(t) exp(gamma * (c + z[t - d])) * (c - z[t - d])^2 * 
+              (exp(c * gamma) - exp(z[t - d] * gamma)) / (exp(c * gamma) + exp(z[t - d] * gamma))^3)
+  }
+  if (type == "exponential") {
+    d2G_dc2 <- sapply(times, function(t) -2 * gamma * exp(-gamma * (c - z[t - d])^2) *
+              (-1 + 2 * c^2 * gamma - 4 * c * z[t - d] * gamma + 2 * z[t - d]^2 * gamma))
+  } else {
+    d2G_dc2 <- sapply(times, function(t) gamma^2 * exp(gamma * (c + z[t - d])) *
+                        (exp(c * gamma) - exp(z[t - d] * gamma)) /
+              (exp(c * gamma) + exp(z[t - d] * gamma))^3)
+  }
+  if (type == "exponential") {
+    d2G_dgammadc <- sapply(times, function(t) -2 * exp(-gamma * (c - z[t - d])^2) * (c - z[t - d]) *
+              (-1 + c^2 * gamma - 2 * c * z[t - d] * gamma + z[t - d]^2 * gamma))
+  } else {
+    d2G_dgammadc <- sapply(times, function(t) -exp(gamma * (z[t - d] - c)) * 
+              (1 - c * gamma + z[t - d] * gamma + exp(gamma * (z[t - d] - c)) * (1 + c * gamma - z[t - d] * gamma)) /
+              (1 + exp(gamma * (z[t - d] - c)))^3)
+  }
+  # convert results to (m-1)x(n-k) matrices
+  G <- matrix(unlist(G), nrow=(m-1), ncol=(n-k));
+  dG_dgamma <- matrix(unlist(dG_dgamma), nrow=(m-1), ncol=(n-k));
+  dG_dc <- matrix(unlist(dG_dc), nrow=(m-1), ncol=(n-k));
+  d2G_dgamma2 <- matrix(unlist(d2G_dgamma2), nrow=(m-1), ncol=(n-k));
+  d2G_dc2 <- matrix(unlist(d2G_dc2), nrow=(m-1), ncol=(n-k));
+  d2G_dgammadc <- matrix(unlist(d2G_dgammadc), nrow=(m-1), ncol=(n-k));
+  # dimension of the parameter vector
+  dim_par = m*(p + 1) + 2*(m - 1) 
+  
+  # (p + 1)x(n - k)
+  Y <- sapply(times, function(t) Yt(x, t, p))
+  Ym <- do.call(rbind, replicate(m, Y,simplify=F))
+  Gt <- rbind(rep(1, (n - k)), G)
+  Gm <- rbind(Gt, rep(0, (n - k)))
+  Gm <- matrix(sapply(1:m, function(j) replicate(p+1, Gm[j,] - Gm[j + 1,])), nrow=m*(p+1), byrow=T)
+  Phim <- (Phi - rbind(rep(0, (p + 1)), Phi[1:(m-1),]))
+  Phi_m <- Phim[2:m,]
+  
+  # skeleton gradients and Hessians
+  skelGrad <- rbind(Gm * Ym, Phi_m %*% Y * dG_dgamma, Phi_m %*% Y * dG_dc)
+  
+  # d2Skel_dPhi2
+  zeros <- matrix(0, nrow=m*(p + 1), ncol=m*(p + 1))
+  # (m*(p + 1))x(2*(m - 1))
+  PhiSigns <- sapply(1:(m - 1), function(k) 
+    sapply(1:m, function(j) {
+      if(k == j) return(rep(-1, p + 1)) else if(j - 1 == k) return(rep(1, p + 1)) else return(rep(0, p + 1))
+  }))
+  PhiSigns <- cbind(PhiSigns, PhiSigns)
+  PhiCornerMatrices <- lapply(1:(n - k), function(t) PhiSigns * cbind(
+    matrix(rep(dG_dgamma[,t], m*(p + 1)), ncol=(m-1), byrow=T),
+    matrix(rep(dG_dc[,t], m*(p + 1)), ncol=(m-1), byrow=T)
+  ))
+  PhiDiagMatrices <- lapply(1:(n - k), function(t) rbind(
+    cbind( diag(d2G_dgamma2[,t], nrow=(m-1), ncol=(m-1)), diag(d2G_dgammadc[,t], nrow=(m-1), ncol=(m-1)) ),
+    cbind( diag(d2G_dgammadc[,t], nrow=(m-1), ncol=(m-1)), diag(d2G_dc2[,t], nrow=(m-1), ncol=(m-1)) )
+  ))
+  skelHessians <- lapply(1:(n - k), function(t) rbind(
+    cbind(zeros, PhiCornerMatrices[[t]]* Ym[,t]),
+    cbind(t(PhiCornerMatrices[[t]]* Ym[,t]) , 
+          PhiDiagMatrices[[t]] * 
+            do.call(cbind, 
+              replicate(2, do.call(rbind, replicate(2, 
+                diag(as.numeric(Phi_m %*% Y[,t]), nrow=m-1,ncol=m-1),
+            simplify=F)),simplify=F))
+    )
+  ))
+  rsGradients <- lapply(1:(n - k), function(t)
+    2 * res[t,] * skelGrad[,t]
+  )
+  rsHessians <- lapply(1:(n - k), function(t) 
+    2 * (sapply(1:dim_par, function(i) sapply(1:dim_par, function(j) 
+      skelGrad[i, t] * skelGrad[j, t])) + res[t,] * skelHessians[[t]])
+  )
+  MeanHessian <- Reduce('+', rsHessians) / (n - k)
+  rsGrads <- lapply(1:(n - k), function(t) rsGradients[[t]] %*% t(rsGradients[[t]]))
+  MeanInfMatrix <- Reduce('+', rsGrads) / (n - k)
+  invMeanHessian <- inv(MeanHessian)
+  # parameter covariance matrix estimate
+  (invMeanHessian %*% MeanInfMatrix %*% invMeanHessian) / n
+}
+```
+
+```{r testParamEstim}
+p=2; d=1;
+# 2 regimes
+m = 2; c=-0.1; gamma=10;
+model <- EstimSTAR_m(xt, p=p, d=d, c=c, gamma=gamma, m=m)
+cat(paste0("\n",model$name, " PhiParams & standard errors:\n Phi:"))
+( Phi = model$PhiParams )
+cat("Phi_se:")
+res = model$residuals
+sqrt( diag(starParamCovMatrix(xt, p=p, d=d, res, Phi, c=c, gamma=gamma, m=m))[1:(m*(p+1))] )
+
+# 3 regimes
+m = 3; c=c(-0.1,0.1); gamma=c(10,11);
+model <- EstimSTAR_m(xt, p=p, d=d, c=c, gamma=gamma, m=m)
+cat(paste0("\n",model$name, " PhiParams & standard errors:\n Phi:"))
+( Phi = model$PhiParams )
+cat("Phi_se:")
+res = model$residuals
+sqrt( diag(starParamCovMatrix(xt, p=p, d=d, res, Phi, c=c, gamma=gamma, m=m))[1:(m*(p+1))] )
+```
+
+This procedure can then be added to the postprocessing method which produces a STAR model with the following attributes:
+
+```{r mEstimSTARPostprocDef}
+EstimSTAR_m_postproc <- function(model) {
+  m <- model$nReg; x <- model$data; n <- model$n;
+  p <- model$p; c <- model$c; gamma <- model$gamma;
+  type <- model$type
+  Phi <- model$PhiParams; res <- model$residuals
+  model$PhiStErrors <- sqrt( diag(starParamCovMatrix(xt, p=p, d=d, res=res, Phi, c=c, gamma=gamma, m=m, type=type))[1:(m*(p+1))] )
+
+  # Information criteria
+  starIC <- as.list(IC(n=n, p=p, sigmaSq=model$resSigmaSq, m=m))
+  model$AIC <- starIC$AIC
+  model$BIC <- starIC$BIC
+  return(model)
+}
+
+cat("LSTAR(2, 2, 0, 10), m=2 : \n")
+str( EstimSTAR_m_postproc(EstimSTAR_m(xt, p=2, d=2, c=0, gamma=10)) ) # 2 regimes
+cat("LSTAR(2, 2, 0, 0.2, 10, 12), m=3 : \n")
+str( EstimSTAR_m_postproc(EstimSTAR_m(xt, p=2, d=2, c=c(0, 0.2), gamma=c(10, 12), m=3)) ) # 3 regimes
+```
+
+### 6.3 2-Regime STAR Estimation Procedure
+
+Now that we've prepared all necessary methods, we proceed to implementing an estimation procedure, similar to the search for SETAR models in
+sections 2.3 and 4.4:
+
+```{r}
+# limit the c parameter by the 7.5-th and 92.5 percentile
+m <- 2
+cmin <- as.numeric(quantile(xt, 0.075)); cmax <- as.numeric(quantile(xt, 0.925));
+h = (cmax - cmin) / 50 # determine the step by which c should be iterated
+cat("hypars=\n")
+( hypars <- starTest$LSTARs ) # hyperparameter array
+```
+
+We search through the above hyperparameter array, and for
+$$
+c = `r paste0(seq(cmin, cmax, h)[1:3], collapse=",")`...`r paste0(seq(cmin, cmax, h)[97:100], collapse=",")`
+$$
+and
+$$
+\gamma = `r paste0(seq(from = 0.5, to = 10, by = 0.5), collapse=",")`
+$$
+
+```{r estimSTARloop}
+models_s <- list() # s as in smooth
+models_s_columns <- list()
+
+suppressMessages(pkgTest("foreach"))
+suppressMessages(pkgTest("doParallel"))
+pkgs <- c("zeallot", "matlib")
+
+n_cores <- (detectCores() - 1)
+
+for(i in 1:nrow(hypars)) {
+  p <- hypars[i, 1]; d <- hypars[i, 2];
+
+  cl <- makeCluster(n_cores)
+  registerDoParallel(cl)
+  pdModels <- foreach(gamma = seq(from = 0.5, to = 10, by = 0.5), .packages = pkgs) %:%
+      foreach(c = seq(cmin, cmax, by = h), .packages = pkgs) %dopar% {
+          tmp <- EstimSTAR_m(xt, p, d, c, gamma) # try to run the function
+          # then test whether it returns`NA` as a result
+          if (!as.logical(sum(is.na(tmp))) ) {
+              list(tmp)
+          }
+      }
+
+  stopCluster(cl)
+  
+  pdOmitted <- lapply(unlist(pdModels, recursive=F),
+      function(m) if(!is.logical(m) && !is.null(m)) m else list(list(resSigmaSq = Inf)))
+  sigmas <- as.numeric(lapply(pdOmitted, function(m) m[[1]]$resSigmaSq))
+  s_orders <- order(sigmas)
+  # only the model whose parameter c gives the lowest residual square sum is chosen for postprocessing
+  min_sigma_model <- EstimSTAR_m_postproc(pdOmitted[[ s_orders[1] ]][[1]])
+  
+  models_s[[length(models_s) + 1]] <- min_sigma_model
+  models_s_columns[[length(models_s_columns) + 1]] <- c(
+      min_sigma_model$type,
+      p, d, round(min_sigma_model$c, digits=4), 
+      round(min_sigma_model$gamma, digits=4),
+      round(min_sigma_model$AIC, digits=4),
+      round(min_sigma_model$BIC, digits=4),
+      round(min_sigma_model$resSigmaSq, digits=4))
+}
+```
+```{r estimSTARtable}
+models_s_columns <- data.frame(matrix(unlist(models_s_columns), nrow=length(models_s_columns), byrow=T))
+names(models_s_columns) <- c(
+  "transition", "p", "d", "c", "gamma",
+  "AIC", "BIC", "resSigmaSq"
+)
+BICs_s <- sapply(models_s, function(m) m$BIC)
+
+orders_s <- order(BICs_s)
+models_s_Out <- models_s_columns[orders_s,]
+head(models_s_Out, n=12)
+
+nSTARs = min(12, nrow(models_s_Out)) # count in case there's less than 12
+```
+
+Again, we sorted the models by their $BIC$. We seem to have a rather small sample, but that is most likely due to only having `r length(hypars)` 
+models with detected $STAR$-type nonlinearity. Estimated parameters were obtained during the postprocessing phase on a model with lowest $\hat\sigma_{\varepsilon}^2$.
+
+On top of that the postprocessing phase also contains an estimation of standard errors of parameters:
+
+```{r}
+models_s_CoeffErrors <- list()
+for(o in orders_s) {
+  p <- models_s[[o]]$p
+  d <- models_s[[o]]$d
+  c <- models_s[[o]]$c
+  gamma <- models_s[[o]]$gamma
+  key <- paste(p, d, round(c, digits=4), round(gamma, digits=4), sep="/")
+  models_s_CoeffErrors[[key]] <- rbind(t(models_s[[o]]$PhiParams),
+                                       t(models_s[[o]]$PhiStErrors))
+  row.names(models_s_CoeffErrors[[key]]) <- t(c("Phi", "stdError"))
+}
+models_s_CoeffErrors[[1]]
+```
+
+### 6.4 Visualisation
+
+We can now visualize the results of the top 3 models:
+
+```{r STARTop3Plot, fig.width=9, fig.height=3.6}
+plotNmax <- 75; plotRange <- 1.2 * c(min(xt), max(xt));
+par(mfrow=c(1,2))
+for (i in 1:3) {
+  model <- models_s[[orders_s[i]]]
+  StarFit <- xt - append(matrix(0., ncol=model$p), model$residuals)
+  m <- length(model$residuals)
+
+  plot(x=dat$time[1:plotNmax], y=xt[1:plotNmax],
+       main=model$name, xlab="year", ylab="%", ylim=plotRange)
+  lines(x=dat$time[1:plotNmax], y=StarFit[1:plotNmax], col="blue",lwd=2)
+  legend("topleft", legend=c("fitted STAR"), col=c("blue"), lty=1, lwd=2, cex=0.8)
+  
+  plot(x=dat$time[1:plotNmax], y=model$residuals[1:plotNmax], type="l", 
+       main=paste0(model$name," Residuals"),
+       xlab="year", ylab="%", ylim=plotRange)
+}
+```
+
+### 6.5 Deterministic Properties
+
+Naturally, it is just as useful to understand the deterministic evolution of the model, as it is in the case of SETAR models from section 2.4.
+
+```{r starEquilibria, fig.width=10, fig.height=3}
+nEquilPlot <- 6
+xmax <- 0.6; xmin <- -0.6;
+n <- length(xt)
+simPlotMax <- 3 * n
+par(mfrow=c(1,2))
+for (i in 1:nSTARs) {
+  equilib_sims <- list()
+  equilibria <- list()
+  model <- models_s[[ orders_s[i] ]];
+  p <- model$p; d <- model$d;
+  c <- model$c; gamma <- model$gamma;
+  sigmaSq <- model$resSigmaSq
+  k <- max(p, d)
+  n_offsets <- 20
+  for (j in 0:n_offsets) {
+    x0 <- (xmax - xmin) / n_offsets * j + xmin
+    equilib_sim <- array()
+    equilib_sim[1] <- x0
+    for (t in 2:simPlotMax) {
+      if (t <= (k + 1)) {
+        equilib_sim[t] <- equilib_sim[t - 1]
+      } else {
+        equilib_sim[t] <- skelSTAR_m(equilib_sim, t, p, d, c, gamma, model$PhiParams)
+      }
+    }
+    
+    equilibrium_rounded <- round(equilib_sim[simPlotMax], digits=4)
+    equilibria[[paste(equilibrium_rounded)]] <- equilibrium_rounded
+    equilib_sims[[j + 1]] <- equilib_sim
+    
+    if (i <= nEquilPlot) {
+      if (j < 1) {
+        plot(x=1:simPlotMax, y=equilib_sim, type="l", col="gray", 
+             xlim=c(1, n / 3), ylim=c(1.1 * xmin, 1.1 * xmax), 
+             main=model$name,
+             xlab="t", ylab="%")
+      } else {
+        lines(x=1:simPlotMax, y=equilib_sim, col="gray")
+      }
+    }
+  }
+  if (i <= nEquilPlot) {
+    for (j in 0:n_offsets) {
+      epsilon <- (xmax - xmin) * 0.025
+      x0 <- c + (n_offsets / 2 - j) * epsilon #small initial perturbations from the threshold value
+      equilib_sim <- array()
+      equilib_sim[1] <- x0
+      for (t in 2:simPlotMax) {
+        if (t < (k + 1)) {
+          equilib_sim[t] <- equilib_sim[t - 1]
+        } else {
+          equilib_sim[t] <- skelSTAR_m(equilib_sim, t, p, d, c, gamma, model$PhiParams)
+        }
+      }
+      equilib_sims[[j + 1]] <- equilib_sim
+      lines(x=1:simPlotMax, y=equilib_sim, lwd=2)
+      lines(x=c(1, simPlotMax), y=c(c, c), col="green", lty="dashed", lwd=2)
+    }
+  }
+  models_s[[ orders_s[i] ]]$equilibria <- as.numeric(equilibria)
+}
+
+cat("model equilibria: \n")
+models_s_Equilibria <- sapply(1:nSTARs, function(i) models_s[[ orders_s[i] ]]$equilibria)
+names(models_s_Equilibria) <- sapply(1:nSTARs, function(i) models_s[[ orders_s[i] ]]$name)
+models_s_Equilibria
+```
+
+### 6.6 Conclusion
+
+The STAR models, selected in this chapter were sampled by the results of nonlinearity tests. Here we see them ordered by their $BIC$:
+
+```{r}
+res <- data.frame(names(models_s_Equilibria))
+names(res) <- c("STAR2 search results:")
+res
+```
+And in order to describe its inner dynamics, we can write the first model explicitly as:
+```{r}
+mod <- models_s[[ orders_s[1] ]]
+p <- mod$p; d <- mod$d; c <- round(mod$c, 4); gamma <- round(mod$gamma, 4);
+phi <- round(mod$PhiParams, 4); se <- round(mod$PhiStErrors,4)
+
+Phi <- matrix(phi, nrow=2, byrow=T); Se <- matrix(se, nrow=2, byrow=T);
+phi1 <- Phi[1,]; phi2 <- Phi[2,];
+se1 <- Se[1,]; se2 <- Se[2,];
+ss <- round(mod$resSigmaSq, 4);
+
+regStr1 <- getRegimeString(phi1, se1, p)
+regStr2 <- getRegimeString(phi2, se2, p)
+```
+
+$$
+X_t = \\
+(`r regStr1`) \ [1 - G_L(X_{t-`r d`}, `r c`, `r gamma`)] + \\ (`r regStr2`) \ G_L(X_{t-`r d`}, `r c`, `r gamma`) + \varepsilon_t
+\\ \quad \hat\sigma_{\varepsilon}^2 = `r ss`
+$$
+
+Besides an $LSTAR$ exclusivity in the selected sample, we notice that the upper bound of the $\gamma$ parameter (`gamma = 10`) seems to be selected, 
+which might suggest a preference for a steep transition between regimes.
+
+## 7 STAR Model Diagnostics, STAR3, and Predictions
+
+In this chapter we conclude the $STAR$ evaluation of our data by testing for remaining $STAR$-3 nonlinearity, and follow by performing forecasts
+on the resulting models. Fortunately, we have prepared a set of general methods for $m$-regimes, which means that we only need to change the default regime count
+to `m = 3` when estimating additional models.
+
+### 7.1 Autocorrelation of Residuals
+
+The null hypothesis of this test claims that the residuals of a nonlinear model are uncorrelated.
+
+```{r}
+suppressMessages(pkgTest("numDeriv"))
+
+signif_code_corr <- function(p_val, correction=1) {
+  c <- correction;
+  return (
+    ifelse(p_val < 0.1/c && p_val >= 0.05/c, ".",
+           ifelse(p_val < 0.05/c && p_val >= 0.01/c, "*",
+                  ifelse(p_val < 0.01/c && p_val >= 0.001/c, "**", 
+                         ifelse(p_val < 0.001/c, "***", "")
+                  )
+           )
+    )
+  )
+}
+
+LMtest_STAR2autocorr <- function(x, d, c, gamma, par, type=c("logistic","exponential"), pmax, alpha=0.05) {
+  type <- match.arg(type)
+  x <- as.ts(x)
+  n <- length(x)
+  p <- length(par)/2 - 1
+
+  Ft <- function(t, param) {  
+    Yt <- Yt(x, t, p)
+    Xt <- c(Yt, Yt * SmoothTransition(x[t-d], param[1], param[2], type=type))
+    c(param[-(1:2)] %*% Xt)
+  }
+
+  phi1 <- par[1:(p+1)]
+  psi <- par[-(1:(p+1))] - phi1
+  # residuals
+  y <- sapply( (p+1):n, function(t) x[t]-Ft(t, c(c, gamma, phi1, psi)) )
+  y <- c(rep(NA,p), y)
+  attributes(y) <- attributes(x)
+  # gradient
+  gradF <- t(sapply((p+1):n, function(t) grad(func=function(param) Ft(t, param), 
+                                              x=c(c, gamma, phi1, psi), 
+                                              method="simple")))
+  NAs <- matrix(NA, nrow=p, ncol=ncol(gradF))
+  gradF <- as.data.frame(rbind(NAs,gradF))
+  for(i in 1:(2*p+4)) attributes(gradF[[i]]) <- attributes(x)
+
+  q <- max(1, ar(y, order.max=pmax, demean=F, na.action=na.omit)$order)
+  tmp <- lapply(1:q, function(i) lag(y, -i))
+  tmp <- do.call(function(...) ts.intersect(..., dframe=T), c(y=list(y), ylag=tmp, as.list(gradF)))
+  z <- lm(y ~ ., data=tmp)$residuals
+  LM <- (n-max(p,q)) * (1 - sum(z^2)/sum(y^2, na.rm = T))
+  c(LM=LM, CV=qchisq(1-alpha, df=q), p_value=1-pchisq(LM, df=q), alpha_corrected=alpha/q)
+}
+```
+
+Under the assuption of the null hypothesis, the test statistic $LM$ is asymptotically $\chi^2(q)$-distributed, which means that we reject
+the null hypothesis on $\alpha \cdot 100 \%$ significance level if `p-value` $< \alpha / q$.
+
+### 7.2 Remaining STAR Nonlinearity
+
+The lack of correlation in the residuals serves only as a primary filter, and does not imply a remaining nonlinearity. This requires
+a specialized test with a null hypothesis that a 2-regime $STAR$ is sufficient.
+
+```{r star3nonlinTest}
+LMtest_STAR3nonLin <- function(x, d, c, gamma, par, type=c("logistic","exponential"), pmax, alpha=0.05) {
+  type <- match.arg(type)
+  x <- as.ts(x)
+  n <- length(x)
+  p <- length(par)/2 - 1
+
+  Ft <- function(t, param) {  
+    Yt <- Yt(x, t, p)
+    Xt <- c(Yt, Yt * SmoothTransition(x[t-d], param[1], param[2], type=type))
+    c(param[-(1:2)] %*% Xt)
+  }
+
+  phi1 <- par[1:(p+1)]
+  psi <- par[-(1:(p+1))] - phi1
+  # residuals
+  y <- sapply( (p+1):n, function(t) x[t]-Ft(t, c(c, gamma, phi1, psi)) )
+  y <- c(rep(NA,p), y)
+  attributes(y) <- attributes(x)
+  # gradient
+  gradF <- t(sapply((p+1):n, function(t) grad(func=function(param) Ft(t, param), 
+                                              x=c(c, gamma, phi1, psi), 
+                                              method="simple")))
+  NAs <- matrix(NA, nrow=p, ncol=ncol(gradF))
+  gradF <- as.data.frame(rbind(NAs,gradF))
+
+  for(i in 1:(2*p+4)) attributes(gradF[[i]]) <- attributes(x)
+  
+  tmp <- c( 
+    lapply(1:p, function(i) stats::lag(x, -i) * stats::lag(x, -d)),
+    lapply(1:p, function(i) stats::lag(x, -i) * stats::lag(x, -d)^2)
+  )
+  switch(type,
+     logistic = {
+       tmp <- c(tmp, lapply(1:p, function(i) stats::lag(x, -i) * stats::lag(x, -d)^3) )
+       df <- 3 * p
+     },
+     exponential = { 
+       df <- 2 * p 
+     })
+  # find AR order from AIC
+  q <- max(1, ar(y, order.max = pmax, demean=F, na.action=na.omit)$order)
+  tmp <- do.call(function(...) ts.intersect(..., dframe = T), c(y = list(y), ylag = tmp, as.list(gradF)))
+  
+  z <- lm(y ~ ., data = tmp)$residuals
+  LM <- (n - max(p, q)) * (1 - sum(z^2) / sum(y^2, na.rm = T))
+  c(LM=LM, CV=qchisq(1 - alpha, df=df), p_value=1-pchisq(LM, df=df), alpha_corrected=alpha/df)
+}
+
+# LMtest_STAR3nonLin(xt, d=2, c=0.131, gamma=10,
+#  par=c(-0.02606206, 0.3141173, 0.3861456, 0.1340813, 1.1096505, -0.5167062), pmax=13)
+```
+Again, the $LM$ statistic is asymptotically $\chi^2(3p)$-distributed if the null hypothesis is true for an LSTAR nonlinearity ($\chi^2(2p)$-distributed for ESTAR), so we compare the p-value 
+with a corrected $\alpha$.
+
+### 7.3 SETAR2 Diagnostics and Evaluation
+
+```{r}
+alpha <- 0.05; nlinSTAR3_orders <- c()
+star3TestResults <- list()
+for (i in 1:nSTARs) {
+  d <- models_s[[ orders_s[i] ]]$d; c <- models_s[[ orders_s[i] ]]$c; gamma <- models_s[[ orders_s[i] ]]$gamma;
+  par <- models_s[[ orders_s[i] ]]$PhiParams; type <- models_s[[ orders_s[i] ]]$type;
+  AC = as.numeric( LMtest_STAR2autocorr(xt, d=d, c=c, gamma=gamma, par=par, type=type, pmax=8)[3:4] )
+  NL3 = as.numeric( LMtest_STAR3nonLin(xt, d=d, c=c, gamma=gamma, par=par, type=type, pmax=13)[3:4] )
+  signifAC=signif_code_corr(AC[1], alpha/AC[2]); signifNL3=signif_code_corr(NL3[1], alpha/NL3[2])
+  if (NL3[1] < NL3[2]) {
+    nlinSTAR3_orders <- c(nlinSTAR3_orders, orders_s[i])
+  }
+  star3TestResults[[i]] <- cbind(c(round(AC,4), signifAC), c(round(NL3,4), signifNL3))
+}
+star3TestResults <- data.frame(matrix(unlist(star3TestResults), nrow=nSTARs, byrow=T))
+colnames(star3TestResults) <- c("p-val(res autocorr)", "alpha_corr", "", "p-val(nlin3)", "alpha_corr", "")
+rownames(star3TestResults) <- sapply(1:nSTARs, function(i) models_s[[ orders_s[i] ]]$name)
+star3TestResults
+```
+
+As it appears, only one model contains possible $STAR$-3 nonlinearity. Hence we sample the delay space
+
+```{r}
+cat(" unique delays: ")
+( star3delays <- unique(sapply(1:length(nlinSTAR3_orders), function(i) models_s[[ nlinSTAR3_orders[i] ]]$d)) )
+```
+### 7.4 Estimating 3-regime STAR Models
+
+Similarly to section 4.4, we compose an overall estimation procedure to search for STAR-3 candidates:
+
+```{r star3EstimProcedure}
+m <- 3; pmax <- 12
+# limit the c parameter by the 7.5-th and 92.5 percentile
+c_seq <- seq(quantile(xt, 0.075), quantile(xt, 0.925), length.out=20)
+# limit the smoothing parameter gamma to:
+gamma_seq <- c(0.5, 1, 2, 4, 7, 10)
+# initiate the search grid for parameters c and gamma
+grid <- as.matrix(expand.grid(c1=c_seq, c2=c_seq, gamma1=gamma_seq, gamma2=gamma_seq))  # all combinations
+grid <- grid[grid[,1] < grid[,2], ]  # only c1 < c2 cases
+# omit the combination causing too narrow (middle) regime
+ind <- apply(grid, 1, function(cg) if(sum(xt>cg[1] & xt<cg[2]) < length(xt)*0.10) FALSE else TRUE)
+grid <- grid[ind,]
+
+models_s3 <- list() # s as in smooth
+models_s3_columns <- list()
+suppressMessages(pkgTest("parallel"))
+
+time1 <- proc.time()
+for(d in star3delays) {
+
+  for (p in d:pmax) {
+    cat(paste0("\n(p,d)=(",p,",",d,"):"))
+    # cycle through all combinations of c and gamma ('grid' rows)
+    cl <- makeCluster(getOption("cl.cores", (detectCores() - 1)))
+    clusterExport(cl, c("EstimSTAR_m","Xt_m","Yt", "SmoothTransition", "xt", "grid", "m", "inv", "p", "d"))
+    pdModels <- parApply(cl, grid, 1, function(cg) {  
+        tmp <- EstimSTAR_m(xt, p, d, cg[1:2], cg[3:4], m)
+        if (!as.logical(sum(is.na(tmp))) ) {
+          tmp
+        }
+    })
+    stopCluster(cl)
+    pdModels <- lapply(pdModels, function(m) if(!is.null(m)) m else list(resSigmaSq = Inf))
+    sigmas <- as.numeric(lapply(pdModels, function(m) m$resSigmaSq))
+    s_orders <- order(sigmas)
+
+    # only the model whose parameter c gives the lowest residual square sum is chosen for postprocessing
+    min_sigma_model <- EstimSTAR_m_postproc(pdModels[[ s_orders[1] ]])
+    
+    # == progress messages ====
+    cPrint <- round(min_sigma_model$c, digits=4); gammaPrint <- round(min_sigma_model$gamma, digits=4)
+    cat(paste0("==>sigmaSq(", min_sigma_model$p, ",", 
+               min_sigma_model$d, ",", paste(na.omit(cPrint), collapse=','),",", 
+                paste(na.omit(gammaPrint), collapse=','),") = ", sigmas[s_orders[1]]))
+    # =========================
+    
+    models_s3[[length(models_s3) + 1]] <- min_sigma_model
+    models_s3_columns[[length(models_s3_columns) + 1]] <- c(
+        min_sigma_model$type,
+        p, d, cPrint, gammaPrint,
+        round(min_sigma_model$AIC, digits=4),
+        round(min_sigma_model$BIC, digits=4),
+        round(min_sigma_model$resSigmaSq, digits=4))
+  }
+}
+time2 <- proc.time()
+cat(paste("\n elapsed time:", round((time2["elapsed"] - time1["elapsed"])/60, 2), "min\n"))
+
+models_s3_columns <- data.frame(matrix(unlist(models_s3_columns), nrow=length(models_s3_columns), byrow=T))
+names(models_s3_columns) <- c(
+  "transition", "p", "d", "c1", "c2", "gamma1", "gamma2",
+  "AIC", "BIC", "resSigmaSq"
+)
+BICs_s3 <- sapply(models_s3, function(m) m$BIC)
+orders_s3 <- order(BICs_s3)
+models_s3_Out <- models_s3_columns[orders_s3,]
+head(models_s3_Out, n=12)
+
+nSTAR3s = min(12, nrow(models_s3_Out)) # count in case there's less than 12
+```
+
+```{r}
+# replace old STAR-2's with remaining nonlinearities with top 3-regime models
+models_star <- models_s
+for(i in 1:length(nlinSTAR3_orders)) { 
+  models_star[[ nlinSTAR3_orders[i] ]] <- models_s3[[ orders_s3[i] ]]
+}
+
+model_s_cols <- list()
+for (i in 1:nSTARs) {
+  model <- models_star[[ orders_s[i] ]]
+  model_s_cols[[i]] <- c(model=model$name, BIC=round(model$BIC, digits=3))
+}
+
+model_s_cols <- unlist(model_s_cols)
+model_s_cols <- data.frame(matrix(unlist(model_s_cols), nrow=nSTARs, byrow=T))
+names(model_s_cols) <- c("model", "BIC")
+
+BICs_star <- sapply(models_star, function(m) m$BIC)
+orders_star <- order(BICs_star)
+model_s_cols <- model_s_cols[orders_star,]
+```
+
+with standard errors:
+
+```{r}
+models_s3_CoeffErrors <- list()
+for(o in orders_s3) {
+  model <- models_s3[[o]]
+  p <- model$p;  d <- model$d
+  c <- model$c;  gamma <- model$gamma
+  key <- model$name
+  models_s3_CoeffErrors[[key]] <- rbind(t(model$PhiParams),
+                                       t(model$PhiStErrors))
+  row.names(models_s3_CoeffErrors[[key]]) <- t(c("Phi", "stdError"))
+}
+models_s3_CoeffErrors
+```
+
+#### Visualisation
+
+```{r STAR3TopPlot, fig.width=9, fig.height=3.6}
+plotNmax <- 75; plotRange <- 1.2 * c(min(xt), max(xt));
+par(mfrow=c(1,2))
+for (i in 1:3) {
+  model <- models_s3[[orders_s3[i]]]
+  StarFit <- xt - append(matrix(0., ncol=model$p), model$residuals)
+  m <- length(model$residuals)
+
+  plot(x=dat$time[1:plotNmax], y=xt[1:plotNmax],
+       main=model$name, xlab="year", ylab="%", ylim=plotRange)
+  lines(x=dat$time[1:plotNmax], y=StarFit[1:plotNmax], col="blue",lwd=2)
+  legend("topleft", legend=c("fitted STAR"), col=c("blue"), lty=1, lwd=2, cex=0.8)
+  
+  plot(x=dat$time[1:plotNmax], y=model$residuals[1:plotNmax], type="l", 
+       main=paste0(model$name," Residuals"),
+       xlab="year", ylab="%", ylim=plotRange)
+}
+```
+
+#### Equilibria
+
+```{r star3Equilibria, fig.width=10, fig.height=3}
+nEquilPlot <- 6
+xmax <- 0.6; xmin <- -0.6;
+n <- length(xt)
+simPlotMax <- 3 * n
+par(mfrow=c(1,2))
+
+for (i in 1:nSTAR3s) {
+  equilib_sims <- list()
+  equilibria <- list()
+  model <- models_s3[[ orders_s3[i] ]];
+  p <- model$p; d <- model$d;
+  c <- model$c; gamma <- model$gamma;
+  sigmaSq <- model$resSigmaSq
+  k <- max(p, d)
+  n_offsets <- 20
+  for (j in 0:n_offsets) {
+    x0 <- (xmax - xmin) / n_offsets * j + xmin
+    equilib_sim <- array()
+    equilib_sim[1] <- x0
+    for (t in 2:simPlotMax) {
+      if (t <= (k + 1)) {
+        equilib_sim[t] <- equilib_sim[t - 1]
+      } else {
+        equilib_sim[t] <- skelSTAR_m(equilib_sim, t, p, d, c, gamma, model$PhiParams, m=3)
+      }
+    }
+    
+    equilibrium_rounded <- round(equilib_sim[simPlotMax], digits=4)
+    equilibria[[paste(equilibrium_rounded)]] <- equilibrium_rounded
+    equilib_sims[[j + 1]] <- equilib_sim
+    
+    if (i <= nEquilPlot) {
+      col <- (j / 4) / n_offsets
+      if (j < 1) {
+        plot(x=1:simPlotMax, y=equilib_sim, type="l", col=rgb(col, col, col, 0.6), lwd=2,
+             xlim=c(1, n / 3), ylim=c(1.1 * xmin, 1.1 * xmax), 
+             main=model$name,
+             xlab="t", ylab="%")
+      } else {
+        lines(x=1:simPlotMax, y=equilib_sim, col=rgb(col, col, col, 0.6), lwd=2)
+      }
+    }
+  }
+  models_s3[[ orders_s3[i] ]]$equilibria <- as.numeric(equilibria)
+}
+
+
+cat("model equilibria: \n")
+models_s3_Equilibria <- sapply(1:nSTAR3s, function(i) models_s3[[ orders_s3[i] ]]$equilibria)
+names(models_s3_Equilibria) <- sapply(1:nSTAR3s, function(i) models_s3[[ orders_s3[i] ]]$name)
+models_s3_Equilibria
+```
+
+#### Results
+
+For the purpose of demonstration we write out the explicit equation of the highest ranked STAR3 model:
+```{r}
+mod <- models_s3[[ orders_s3[1] ]]
+p <- mod$p; d <- mod$d; c <- round(mod$c, 4); gamma <- round(mod$gamma, 4);
+phi <- round(mod$PhiParams, 4); se <- round(mod$PhiStErrors,4)
+
+Phi <- matrix(phi, nrow=3, byrow=T); Se <- matrix(se, nrow=3, byrow=T);
+phi1 <- Phi[1,]; phi2 <- Phi[2,]; phi3 <- Phi[3,]
+se1 <- Se[1,]; se2 <- Se[2,]; se3 <- Se[3,]
+ss <- round(mod$resSigmaSq, 4);
+
+regStr1 <- getRegimeString(phi1, se1, p)
+regStr2 <- getRegimeString(phi2, se2, p)
+regStr3 <- getRegimeString(phi3, se3, p)
+```
+
+$$
+X_t = \\
+(`r regStr1`) \ [1 - G_L(X_{t-`r d`}, `r c[1]`, `r gamma[1]`)] + \\ 
+(`r regStr2`) \ [G_L(X_{t-`r d`}, `r c[1]`, `r gamma[1]`) - G_L(X_{t-`r d`}, `r c[2]`, `r gamma[2]`)] + \\
+(`r regStr3`) \ G_L(X_{t-`r d`}, `r c[2]`, `r gamma[2]`) + \varepsilon_t
+\\ \quad \hat\sigma_{\varepsilon}^2 = `r ss`
+$$
+
+### 7.5 Predictions
+
+Now that we replaced the models with remaining STAR-3 nonlinearity with their 3-regime variants, we can proceed to test the resulting models' predictive abilities.
+We will be using a predict procedure `PredictSTAR` similar to `PredictSETAR` from section 5.1.
+
+```{r predictStar}
+PredictSTAR <- function(
+  model, x_train, x_eval, horizon=(length(x_eval) + 1), n_ahead=1, 
+  type=c("naive", "MC", "bootstrap"), Nboot=100, alpha=0.2, refit=F,
+  single.step=F, return.paths=F) {
+
+  type <- match.arg(type)
+  
+  p <- model$p; d <- model$d; # model dims
+  c <- model$c; gamma <- model$gamma # threshold params
+  m <- model$nReg
+
+  if(missing(x_train)) {
+    x_train = model$data # training sample
+  }
+  
+  # result series
+  x_res <- x_train
+  # training sample size
+  nt <- length(x_res)
+  sd_res <- sqrt(model$resSigmaSq)
+
+  # extract model residuals
+  resid <- as.numeric(model$residuals)
+  resid <- resid[!is.na(resid)]
+  
+  # fill the prediction part of the array with zeros
+  x_res <- c(x_res, rep(0, horizon))
+  xrange <- p - ((p - 1):0)
+  
+  if(type=="naive") Nboot <- 1
+  
+  predictions <- function(x_res, eval.model=model, tmin=nt) {
+    noise <- switch(
+      type, 
+        "naive"= rep(0, n_ahead), 
+        "MC"= rnorm(n_ahead, mean = 0, sd=sd_res), 
+        "bootstrap" = sample(resid, size=n_ahead, replace=T)
+    )
+
+    for(t in (tmin + (1:n_ahead))) {
+      x_res[t] <- skelSTAR_m(x_res, t, p, d, c, gamma, eval.model$PhiParams, m)
+      if (!single.step) x_res[t] <- x_res[t] + noise[t - tmin]
+    }
+    
+    if (!single.step) {
+      return(x_res)
+    }
+    return(x_res[tmin + n_ahead])
+  }
+
+  if(single.step) {
+    n_ahead <- 1
+    x_data <- c(x_train, x_eval)
+    if (nt + horizon > length(x_data)) horizon <- (length(x_eval) + 1)
+    
+    if (refit) {
+      trans_type <- model$type
+      fit_model <- EstimSTAR_m_postproc( EstimSTAR_m(x_data, p, d, c, gamma, type=trans_type, m) )
+    } else {
+      fit_model <- model
+    }
+    
+    x_simulations <- matrix(rep(x_data[nt], Nboot), ncol=Nboot)
+    for (t in (nt + 1:horizon)) {
+      x_source <- x_data[1:(t - 1)]
+      x_simulations <- rbind(x_simulations, replicate(Nboot, 
+            predictions(x_source, eval.model=fit_model, tmin=(t - 1))
+      ))
+      x_res[t] <- mean(x_simulations[t - nt,])
+    }
+    x_pred <- x_res[nt + 1:horizon]
+  } else {
+    # === MULTISTEP ===
+    if (n_ahead == 1) n_ahead <- horizon
+
+    x_simulations <- replicate(Nboot, predictions(x_res))
+    x_sim_means <- rowMeans(x_simulations, na.rm=T)
+    x_pred <- x_sim_means[(nt - 1) + 1:n_ahead]
+  }
+      
+  # if not naive compute conf. intervals:
+  x_errors <- x_pred
+  if(type != "naive") {
+    x_errors <- t(apply(
+      x_simulations[(nt - 1) * (!single.step) + 1:horizon, ,drop=F], MARGIN=1, quantile, 
+      prob=sort(c(alpha, 1 - alpha)), na.rm=T))
+  }
+  
+  # compute prediction errors
+  MSE <- sum((x_eval[1:horizon] - x_pred)^2, na.rm=T) / horizon
+  # RMSE <- sqrt(MSE)
+
+  if(type == "naive"){
+    result <- list(pred=x_pred, MSE=MSE)
+  } else {
+    if (return.paths) result <- list(pred=x_pred, se=x_errors, MSE=MSE, alpha=alpha,
+                                     paths=x_simulations[(nt - 1) * (!single.step) + 1:horizon,])
+    else result <- list(pred=x_pred, se=x_errors, MSE=MSE, alpha=alpha)
+  }
+  
+  return(result)
+}
+```
+
+Single-step test:
+
+```{r}
+x_all <- c(x_train, x_eval)
+model <- models_s3[[ orders_s3[1] ]]
+n_ahead <- 10; precision <- 3;
+cat("naive (1-step):\n")
+c(xt[nt], round(PredictSTAR(model, x_train, x_eval, single.step=T, horizon=n_ahead)$pred, digits=precision))
+cat("data:\n"); x_all[nt:(nt + n_ahead)]
+```
+
+Multi-step test:
+
+```{r}
+n_ahead <- 10; precision <- 3;
+cat(paste0("naive (", n_ahead,"-step):\n"))
+c(xt[nt], round(PredictSTAR(model, x_train, x_eval, horizon=n_ahead)$pred, digits=precision))
+cat(paste0("Monte Carlo (",n_ahead,"-step):\n"))
+c(xt[nt], round(PredictSTAR(model, x_train, x_eval, type="MC", horizon=n_ahead)$pred, digits=precision))
+cat(paste0("Bootstrap (",n_ahead,"-step):\n"))
+c(xt[nt], round(PredictSTAR(model, x_train, x_eval, type="bootstrap", horizon=n_ahead)$pred, digits=precision))
+cat("data:\n"); x_all[nt:(nt + n_ahead)]
+```
+
+We will also use parts of the previous `predictSETAR_andPlot` method.
+
+```{r predictSTARandPlot}
+predictSTAR_andPlot <- function(
+  model, time, x_train, x_eval, pred_type=c("naive", "MC", "bootstrap"), Nboot=100,
+  single.step=T, refit=F, plot.paths=T, print.rmse=T, alpha=0.2, plot.leg=F, legend.pos="top", plt_range=NA
+) {
+  pred_type <- match.arg(pred_type)
+  ne <- length(x_eval); nt <- length(x_train)
+  xt <- c(x_train, x_eval)
+  
+  if (pred_type == "naive" && plot.paths) plot.paths <- F # no reason to plot paths of a naive pred
+  if (single.step) { n_ahead <- 1 } else { n_ahead <- ne + 1} 
+
+  predict <- PredictSTAR(model, x_train, x_eval, single.step=single.step, Nboot=Nboot, n_ahead=n_ahead, 
+                          type=pred_type, return.paths=plot.paths, alpha=alpha, refit=refit)
+  x <- predict$pred
+  
+  err_low <- predict$se[,1]
+  err_high <- predict$se[,2]
+  
+  x_paths <- predict$paths
+  
+  history <- as.integer(0.02 * nt)
+  x_all <- c(xt, x, err_low, err_high, x_paths)
+  if (as.logical(sum(is.na(plt_range)))) {
+    plt_range <-  1.2 * c(min(x_all, na.rm=T), max(x_all, na.rm=T))
+  }
+  time_range <- (nt - history):(nt + ne)
+  pred_range <- 1:(ne + 1)
+  
+  c <- model$c; gamma <- model$gamma
+
+  method_name <-  paste0(ifelse(single.step, "",
+    switch(pred_type, "naive" = "Naive", "MC" = "Monte Carlo", "bootstrap" = "Bootstrap")), 
+    " (", n_ahead, "-step) ", ifelse(plot.paths, "sim", ""), ifelse(print.rmse, paste("\n RMSE =", round(sqrt(predict$MSE), digits=4)), ""))
+  method_name_short <- paste0(ifelse(single.step,"", pred_type), " (", n_ahead, "-step) ")
+  
+  if (plot.leg) {
+    if (length(c) > 1) {
+      legend_names <- c("data", method_name_short, 
+                        ifelse(pred_type != "naive" && !single.step, paste0((1 - predict$alpha) * 100,"% conf.interval   "), NA), "c1", "c2", ifelse(plot.paths, "paths", NA))
+      legend_col <- c("black", "dodgerblue3", ifelse(pred_type != "naive" && !single.step, "dodgerblue2", NA), "brown3", "green3", ifelse(plot.paths, gray(0.6, alpha=0.2), NA))
+      legend_lty <- c(NA, 1, ifelse(pred_type != "naive" && !single.step, 2, NA), 2, 2, ifelse(plot.paths, 1, NA))
+      legend_pch <- c(1, NA, NA, NA, NA, NA)
+      legend_lwd <- c(2, 2, ifelse(pred_type != "naive" && !single.step, 2, NA), 2, 2, ifelse(plot.paths, 1, NA))
+    } else {
+      legend_names <- c("data", method_name_short, 
+                        ifelse(pred_type != "naive" && !single.step, paste0((1 - predict$alpha) * 100,"% conf.interval   "), NA), "c", ifelse(plot.paths, "paths", NA))
+      legend_col <- c("black", "dodgerblue3", ifelse(pred_type != "naive" && !single.step, "dodgerblue2", NA), "green3", ifelse(plot.paths, gray(0.6, alpha=0.2), NA))
+      legend_lty <- c(NA, 1, ifelse(pred_type != "naive" && !single.step, 2, NA), 2, ifelse(plot.paths, 1, NA))
+      legend_pch <- c(1, NA, NA, NA, NA)
+      legend_lwd <- c(2, 2, ifelse(pred_type != "naive" && !single.step, 2, NA), 2, ifelse(plot.paths, 1, NA))
+    }    
+  }
+  
+  plot(x=dat$time[time_range],y=xt[time_range], type="b", lwd=2,
+     ylim=plt_range, main=paste(model$name, method_name), xlab="t", ylab="x[%]")
+  # simulations
+  if (plot.paths) matlines(x=matrix(time[(nt - 1) + pred_range], byrow=T), y=x_paths, col=gray(0.6, alpha=0.2), lty=1)
+  # conf. interval fill
+  if (pred_type != "naive" && !single.step) {
+  polygon(
+    x=c(time[(nt - 1) + pred_range], rev(time[(nt - 1) + pred_range])), y=c(err_low[pred_range],rev(err_high[pred_range])), 
+        col=adjustcolor("dodgerblue2", alpha.f=0.3), border=F)      
+  }
+  # x
+  lines(x=time[(nt - 1) + pred_range], y=x[pred_range], col="dodgerblue3", lwd=2)
+  # conf. intervals
+  if (pred_type != "naive" && !single.step) {
+    lines(x=time[(nt - 1) + pred_range], y=err_low[pred_range], col="dodgerblue2", lwd=2, lty="dashed")
+    lines(x=time[(nt - 1) + pred_range], y=err_high[pred_range], col="dodgerblue2", lwd=2, lty="dashed")        
+  }
+  # thresholds
+  if (length(c) > 1) {
+    lines(x=c(time[(nt-history)], time[(nt + ne)]), y=c(c[1],c[1]), col="brown3", lty="dashed", lwd=2)
+    lines(x=c(time[(nt-history)], time[(nt + ne)]), y=c(c[2],c[2]), col="green3", lty="dashed", lwd=2)      
+  } else {
+    lines(x=c(time[(nt-history)], time[(nt + ne)]), y=c(c,c), col="green3", lty="dashed", lwd=2)
+  }
+  if (plot.leg) {
+    legend(legend.pos, horiz=T, legend=legend_names, 
+           col=legend_col, 
+           lty=legend_lty, 
+           pch=legend_pch, lwd=legend_lwd, cex=0.8)    
+  }
+}
+```
+
+```{r predictPlot2, fig.width=10, fig.height=4}
+par(mfrow=c(1, 1))
+predictSTAR_andPlot(
+  model, time=dat$time, x_train=x_train, x_eval=x_eval, 
+  pred_type="MC", single.step=T, plot.paths=F, plot.leg=T)
+
+predictSTAR_andPlot(
+  model, time=dat$time, x_train=x_train, x_eval=x_eval, 
+  pred_type="MC", single.step=F, plot.paths=T, plot.leg=T)
+```
+
+#### Single-Step Predictions
+
+```{r singleStepNaivePlotsSTAR, fig.width=11, fig.height=4}
+par(mfrow=c(1,2))
+for (i in 1:nSTARs) {
+  predictSTAR_andPlot(
+  models_star[[ orders_s[i] ]], time=dat$time, x_train=x_train, x_eval=x_eval, 
+  refit=T, single.step=T, plot.paths=F)
+}
+```
+
+#### Multi-Step Predictions
+
+Monte Carlo:
+
+```{r multiStepMCPlotsSTAR, fig.width=11, fig.height=4}
+par(mfrow=c(1,2))
+for (i in 1:nSTARs) {
+  predictSTAR_andPlot(
+  models_star[[ orders_s[i] ]], time=dat$time, x_train=x_train, x_eval=x_eval, 
+  pred_type="MC", single.step=F, plot.paths=T)
+}
+```
+
+Bootstrap:
+
+```{r multiStepBootPlotsSTAR, fig.width=11, fig.height=4}
+par(mfrow=c(1,2))
+for (i in 1:nSTARs) {
+  predictSTAR_andPlot(
+  models_star[[ orders_s[i] ]], time=dat$time, x_train=x_train, x_eval=x_eval, 
+  pred_type="bootstrap", single.step=F, plot.paths=T)
+}
+```
+
+### 7.6 Conclusion and STAR Model Evaluation
+
+Compared to SETAR predictions from chapter 5, we do not have any wildly divergent models. The mean paths of multi-step predictions quickly stabilize, 
+with only slight fluctuations around the local equilibrium.
+
+```{r}
+Nb = 100;
+se_factor <- 4; se_factor_multi <- 8;
+model_s_cols_mse <- cbind(model_s_cols, sigmaSq=rep(0, nSTARs), 
+                        MSE_1step=rep(0, nSTARs), div=rep("", nSTARs), 
+                        MSE_MC=rep(0, nSTARs), div=rep("", nSTARs),
+                        MSE_boot=rep(0, nSTARs), div=rep("", nSTARs), stringsAsFactors=F)
+for (i in 1:nSTARs) {
+  model <- models_star[[ orders_s[i] ]];
+  # prediction errors have to be computed again since passing model to predictSETAR_andPlot does not
+  # pass reference, only a copy
+  predict1_naive <- PredictSTAR(model, x_train, x_eval, single.step=T, type="naive", return.paths=F)
+  predict_mc <- PredictSTAR(model, x_train, x_eval, single.step=F, type="MC", return.paths=F, Nboot=Nb)
+  predict_boot <- PredictSTAR(model, x_train, x_eval, single.step=F, type="bootstrap", return.paths=F, Nboot=Nb)
+  model$mse_naive <- predict1_naive$MSE; model$mse_mc <- predict_mc$MSE; model$mse_boot <- predict_boot$MSE
+  
+  divergent1 <- se_factor * model$resSigmaSq < predict1_naive$MSE
+  divergent2 <- se_factor_multi * predict1_naive$MSE < predict_mc$MSE
+  divergent3 <- se_factor_multi * predict1_naive$MSE < predict_boot$MSE
+  
+  model_s_cols_mse[i, 3] <- round(model$resSigmaSq, digits=4); # fill in rss
+  model_s_cols_mse[i, 4] <- round(predict1_naive$MSE, digits=4);
+  model_s_cols_mse[i, 5] <- ifelse(divergent1, "~","");
+  model_s_cols_mse[i, 6] <- round(predict_mc$MSE, digits=4);
+  model_s_cols_mse[i, 7] <- ifelse(divergent2, "~","");
+  model_s_cols_mse[i, 8] <- round(predict_boot$MSE, digits=4);
+  model_s_cols_mse[i, 9] <- ifelse(divergent3, "~",""); 
+}
+names(model_s_cols_mse) <- c("model", "BIC", "sigmaSq", "MSE(1-step)","","MSE(MC)","","MSE(boot)","")
+model_s_cols_mse
+```
+
+In the above table, we observe all examined STAR models, ordered by their ability to fit the data (given by $BIC$) from best to less accurate.
+
+Unlike in the case of SETAR models in section 5.5, when comparing their $MSE$ with $\hat\sigma^2_{\varepsilon}$, we see no divergence from the evaluation data.
+Instead we observe a rather stable behavior of all $STAR$ predictions.
+
+Now we pick the best models according to their given $MSE$ depending on the prediction method (`"naive"`, `"mc"`, `"boot"`):
+
+```{r}
+cat("Models sorted by 1-step naive MSE:\n")
+non_divergent <- model_s_cols_mse[which( sapply(1:nSTARs, function(i) nchar(gsub(" ", "", model_s_cols_mse[i, 5])) == 0) ), ]
+mse_naive_orders <- order(non_divergent[, 4])
+mse_naive_cols <- non_divergent[mse_naive_orders, ]
+mse_naive_cols[, 1:4]
+```
+
+```{r}
+cat("Models sorted by Monte Carlo MSE:\n")
+non_divergent <- model_s_cols_mse[which( sapply(1:nSTARs, function(i) nchar(gsub(" ", "", model_s_cols_mse[i, 7])) == 0) ), ]
+mse_mc_orders <- order(non_divergent[, 6])
+mse_mc_cols <- non_divergent[mse_mc_orders, ]
+cbind(mse_mc_cols[, 1:3], MSE_mc=mse_mc_cols[, 6])
+```
+
+```{r}
+cat("Models sorted by Bootstrap MSE:\n")
+non_divergent <- model_s_cols_mse[which( sapply(1:nSTARs, function(i) nchar(gsub(" ", "", model_s_cols_mse[i, 9])) == 0) ), ]
+mse_boot_orders <- order(non_divergent[, 8])
+mse_boot_cols <- non_divergent[mse_mc_orders, ]
+cbind(mse_boot_cols[, 1:3], MSE_boot=mse_boot_cols[, 8])
+```
+
+And as we see, the 3-regime model seems to be better at multiple step forecasting, while the order remains almost unchanged for 1-step predictions
+when compared to ordering by BIC. This implies that test data fit accuracy of chosen STAR models also gives rise to reasonable forecasting precision.
+
+## 8 Markov-Switching Models
+
+Markov Switching models rely on an exogenous random variable $s_t$ that cannot be directly observed, we can only estimate probabilities of the process
+switching between individual regimes.
+
+### 8.1 Methods
+
+We begin by suplying a dummy fitted linear model to the `msmFit` function.
+```{r}
+suppressMessages(pkgTest("magrittr"))
+suppressMessages(pkgTest("MSwM"))
+xt <- x_train
+# k is nReg
+# dummyFit <- 
+# summary( msmFit(lm(y ~ 1, data.frame(y = xt)), k=2, p=1, sw=rep(T, 1 + 2)) )
+```
+Then we do this for the following orders $p$:
+
+```{r}
+bicMSW <- function(x, p, nreg) {
+  aic2 <- c();  bic2 <- c();
+  aic3 <- c();  bic3 <- c();
+  
+  fitLin <- lm(y ~ 1, data.frame(y = xt))
+  # 2-reg models
+  k <- nreg[1]; tmp <- c()
+  cat("2-reg:")
+  cat("   p = ")
+  for(i in p) {
+    cat(i, " ")
+    fitmsm <- try( msmFit(fitLin, k = k, p = i, sw = rep(T, i + 2)), silent=T)
+    if (class(fitmsm) != "try-error") {
+      swi <- fitmsm@switch[-length(fitmsm@switch)]
+      np <- fitmsm["k"] * sum(swi) + sum(!swi)
+      
+      # IC
+      aic2 <- c(aic2, 2 * fitmsm["Fit"]["logLikel"] + 2 * np)
+      bic2 <- c(bic2, 2 * fitmsm["Fit"]["logLikel"] + 2 * np * log(nrow(fitmsm@model$model)) )
+    }
+  }
+  
+  # 3-reg models
+  k <- nreg[2]
+  cat("3-reg:")
+  cat("   p = ")
+  for(i in p) {
+    cat (i, " ")
+    fitmsm <- try( msmFit(fitLin, k = k, p = i, sw = c(rep(T, i + 1), F)), silent=T)
+    if (class(fitmsm) != "try-error") {
+      swi <- fitmsm@switch[-length(fitmsm@switch)]
+      np <- fitmsm["k"] * sum(swi) + sum(!swi)
+    
+      # IC
+      aic3 <- c(aic3, 2 * fitmsm["Fit"]["logLikel"] + 2 * np )
+      bic3 <- c(bic3, 2 * fitmsm["Fit"]["logLikel"] + 2 * np * log(nrow(fitmsm@model$model)) )
+    }
+  }
+  
+  results <- list()
+  results$p <- p
+  results$aic <- list("2" = aic2, "3" = aic3)
+  results$bic <- list("2" = bic2, "3" = bic3)
+  return(results)
+}
+
+pmax <- 12
+suppressWarnings( results <- bicMSW(xt, p=1:pmax, nreg=2:3) )
+```
+
+### 8.2 A 2-Regime MSW Model
+
+We will use the above procedure to pool the results in search of parameter $p$ minimizing $BIC$:
+
+```{r, fig.height=3, fig.width=6}
+par(mfrow=c(1,1))
+  plot(results$bic$`2`, type = "p", ylim = c(min(results$aic$`2`), max(results$bic$`2`)), main = "2-regime MSW\nInf crit", ylab = "IC", xlab = "p")
+  lines(results$aic$`2`, type = "p", col = "red")
+  legend("topleft", legend=c("BIC","AIC"), col=c("black","red"), pch=1, cex=0.8)
+
+
+p <- which.min(results$bic$`2`)
+```
+
+and save the result. We can easily access the fitted `msm` (regime-to-regime) transition probability matrix $\textbf{P}$ through a property `@transMat`
+
+```{r}
+suppressWarnings( fitmsm2 <- msmFit(lm(y ~ 1, data.frame(y = xt)), k=2, p=p, sw=rep(T, 1 + 2)) )
+cat("transProbMatrix = \n")
+round(fitmsm2@transMat, 4)
+```
+
+Another important result is the ergodic probability vector $\boldsymbol{\pi} = (\textbf{A}^{\top}\textbf{A})^{-1}\textbf{A}^{\top} \textbf{e}_{m+1}$ where $\textbf{A} = (\textbf{P}^{\top} - \textbf{I}_{m}, \boldsymbol{1}_m^{\top})^{\top}$ and $\boldsymbol{1}_m = (1,...,1)^{\top}$ with the $\textbf{e}_{m+1} = (\textbf{I}_{m+1})_{. \ , m+1}$ (column):
+
+```{r}
+cat("ergodicProbs = \n")
+M <-diag(fitmsm2@k) - fitmsm2@transMat
+A <- rbind(M, rep(1, fitmsm2@k))
+solve(t(A) %*% A) %*% t(A) %*% rbind(as.matrix(rep(0, fitmsm2@k)), 1)
+```
+
+On top of that, we can show the coefficient errors:
+
+```{r}
+cat("2-regime AR coeffs:\n")
+fitmsm2@Coef
+cat("sErrors:\n")
+fitmsm2@seCoef
+```
+
+Moreover, we can plot time components of filtered and smoothed probabilities for each regime:
+
+```{r, fig.height=4, fig.width=10}
+par(mfrow=c(1,1))
+par(mar=c(3.5,3.5,3.5,3.5))
+plotProb(fitmsm2, which = 1)
+```
+
+and also mark the portions of the time series, appearing in each regime, from the filtered probabilities
+
+```{r, fig.height=5, fig.width=12}
+par(mfrow=c(1,2))
+par(mar=c(3.5,3.5,3.5,3.5))
+plotProb(fitmsm2, which = 2)
+par(mar=c(3.5,3.5,3.5,3.5))
+plotProb(fitmsm2, which = 3)
+```
+
+Thus, we can observe that parts of the observed time series, with maximal filtered probability in the first regime, 
+behave with lower volatility, and higher frequency of fluctuation, when compared to parts with maximum filtered probability in the second regime.
+
+### 8.3 A 3-regime MSW Model
+
+We show the same results as in the previous section:
+
+```{r, fig.height=3, fig.width=6}
+par(mfrow=c(1,1))
+  plot(results$bic$`3`, type = "p", ylim = c(min(results$aic$`3`), max(results$bic$`3`)), main = "3-regime MSW\nInf crit", ylab = "IC", xlab = "p")
+  lines(results$aic$`3`, type = "p", col = "red")
+  legend("topleft", legend=c("BIC","AIC"), col=c("black","red"), pch=1, cex=0.8)
+
+
+p <- which.min(results$bic$`3`)
+```
+In order to avoid singularity we choose $p=2$.
+```{r}
+suppressWarnings( fitmsm3 <- msmFit(lm(y ~ 1, data.frame(y = xt)), k=3, p=2, sw=c(rep(T, 2 + 1), F)) )
+cat("transProbMatrix = \n")
+round(fitmsm3@transMat, 4)
+
+cat("ergodicProbs = \n")
+M <-diag(fitmsm3@k) - fitmsm3@transMat
+A <- rbind(M, rep(1, fitmsm3@k))
+solve(t(A) %*% A) %*% t(A) %*% rbind(as.matrix(rep(0, fitmsm3@k)), 1)
+
+cat("3-regime AR coeffs:\n")
+fitmsm3@Coef
+cat("sErrors:\n")
+fitmsm3@seCoef
+```
+```{r, fig.height=8, fig.width=10}
+par(mar=c(3.5,3.5,3.5,3.5))
+plotProb(fitmsm3, which = 1)
+```
+```{r, fig.height=5, fig.width=12}
+par(mfrow=c(1,3))
+par(mar=c(3.5,3.5,3.5,3.5))
+plotProb(fitmsm3, which = 2)
+par(mar=c(3.5,3.5,3.5,3.5))
+plotProb(fitmsm3, which = 3)
+par(mar=c(3.5,3.5,3.5,3.5))
+plotProb(fitmsm3, which = 4)
+```
+
+Unlike the previous 2-regime variant, the dominance of each regime in the time series is, 
+according to the filtered probability estimates, quite rare. Further analysis will be carried out in the next section.
+
+### 8.4 Diagnostics
+
+The diagnostics of an MSW model rely either on the score function (i.e: gradient of the log-likelihood function: $\nabla_{\theta_{\Phi,\sigma_{\varepsilon}}}\log{f(X_t|\Omega_{t-1};\theta)}$) or
+take form of a Lagrange multiplier (LM) test. 
+
+For the sake of simplicity, we chose to analyze the models graphically, by observing their residuals from each regime's fitted values.
+
+2-Regime residuals:
+
+```{r, fig.height=4, fig.width=10}
+par(mfrow=c(1,2))
+plotDiag(fitmsm2, regime = 1, which = 1)
+plotDiag(fitmsm2, regime = 2, which = 1) 
+```
+And quantile-quantile plots:
+```{r, fig.height=4, fig.width=10}
+par(mfrow=c(1,3))
+plotDiag(fitmsm2, regime = 1, which = 2)
+plotDiag(fitmsm2, regime = 2, which = 2) 
+```
+In the first regime the closeness of the data to linearity suggests a uniform distribution of residuals, whereas for the second regime, 
+we observe a slight fluctuation in the quantile plot. This means that the second regime could possibly harbor remaining nonlinear behavior.
+This can be observed in the residual ACF:
+
+```{r, fig.height=5, fig.width=10}
+par(mfrow=c(1,1))
+par(mar=rep(4,4))
+plotDiag(fitmsm2, regime = 1, which = 3)
+par(mar=rep(4,4))
+plotDiag(fitmsm2, regime = 2, which = 3)
+```
+
+3-regime residuals:
+
+```{r, fig.height=4, fig.width=12}
+par(mfrow=c(1,3))
+plotDiag(fitmsm3, regime = 1, which = 1)
+plotDiag(fitmsm3, regime = 2, which = 1)
+plotDiag(fitmsm3, regime = 3, which = 1) 
+```
+
+3-regime quantile-quantile plots:
+
+```{r, fig.height=4, fig.width=10}
+par(mfrow=c(1,3))
+plotDiag(fitmsm3, regime = 1, which = 2)
+plotDiag(fitmsm3, regime = 2, which = 2) 
+plotDiag(fitmsm3, regime = 3, which = 2) 
+```
+
+3-regime square resid autocorrelations:
+
+```{r, fig.height=5, fig.width=10}
+par(mfrow=c(1,1))
+par(mar=rep(4,4))
+plotDiag(fitmsm3, regime = 1, which = 3)
+par(mar=rep(4,4))
+plotDiag(fitmsm3, regime = 2, which = 3)
+par(mar=rep(4,4))
+plotDiag(fitmsm3, regime = 3, which = 3)
+```
+
+Which suggests data might still contain some nonlinearity not covered by the second regime.
+
+### 8.5 Predictions
+
+```{r, fig.height=4, fig.width=10}  
+# 1-step predict
+matPredic2 <- fitmsm2@transMat %*% t(fitmsm2@Fit@filtProb)
+MSWPredic2 <- vector(length = length(1:length(x_eval)))
+
+for(t in 3:length(x_eval)){
+  valuePredic <- (t(fitmsm2@Coef)[1:2, 1] %*% 
+                    c(1, x_eval[(t - fitmsm2@p + 1):t])) * matPredic2[1] + 
+    (t(fitmsm2@Coef)[1:2, 2] %*% 
+       c(1, x_eval[(t - fitmsm2@p + 1):t])) * matPredic2[2]
+  
+  MSWPredic2[t - 2] <- valuePredic
+}
+
+par(mfrow=c(1,2))
+plot(x_eval, type = "b", main="MSW(2) 1-step prediction", xlab="t", ylab="x[%]")
+lines(MSWPredic2, type = "l", col = "dodgerblue3", lwd=2)
+
+matPredic3 <- fitmsm3@transMat %*% t(fitmsm3@Fit@filtProb)
+MSWPredic3 <- vector(length = length(1:length(x_eval)))
+
+for(t in 3:length(x_eval)){
+  valuePredic <- (t(fitmsm3@Coef)[1:3, 1] %*%
+                    c(1, x_eval[(t - fitmsm3@p + 1):t])) * matPredic3[1] +
+    (t(fitmsm3@Coef)[1:3, 2] %*%
+       c(1, x_eval[(t - fitmsm3@p + 1):t])) * matPredic3[2] +
+    (t(fitmsm3@Coef)[1:3, 3] %*%
+       c(1, x_eval[(t - fitmsm3@p + 1):t])) * matPredic3[3]
+  
+  MSWPredic3[t - 2] <- valuePredic
+}
+
+
+plot(x_eval, type = "b", main="MSW(3) 1-step prediction", xlab="t", ylab="x[%]")
+lines(MSWPredic3, type = "l", col = "dodgerblue3", lwd=2)
+```
+
+As we can observe, a 3-regime MSW proves to be less efficient in predicting the values of the evaluation part.
+
+### 8.6 Conclusion
+
+We can conclude that our use of MSW models from the `MSwM` package was purely experimental, mainly due to the fact that they fail to produce reliable 1-step predictions
+when compared to, for example, STAR models. 
+```{r}
+phi <- round(fitmsm2@Coef,4)
+se <- round(fitmsm2@seCoef,4)
+
+ss1 <- mean(msmResid(fitmsm2, regime=1)^2)
+ss2 <- mean(msmResid(fitmsm2, regime=2)^2)
+
+regStr1 <- getRegimeString(phi[1,], se[1,], p=1)
+regStr2 <- getRegimeString(phi[2,], se[2,], p=1)
+```
+$MSW(2, 1)$:
+
+$$
+X_t = \begin{cases}
+`r regStr1` + \varepsilon_t &\quad \text{if } s_t = 1 \\
+`r regStr2` + \varepsilon_t &\quad \text{if } s_t = 2
+\end{cases} \\ \quad \hat\sigma_{\varepsilon, 1}^2 = `r ss1` \ , \ \hat\sigma_{\varepsilon, 2}^2 = `r ss2`
+$$
+
+```{r}
+phi <- round(fitmsm3@Coef,4)
+se <- round(fitmsm3@seCoef,4)
+
+ss1 <- mean(msmResid(fitmsm3, regime=1)^2)
+ss2 <- mean(msmResid(fitmsm3, regime=2)^2)
+ss3 <- mean(msmResid(fitmsm3, regime=3)^2)
+
+regStr1 <- getRegimeString(phi[1,], se[1,], p=2)
+regStr2 <- getRegimeString(phi[2,], se[2,], p=2)
+regStr3 <- getRegimeString(phi[3,], se[3,], p=2)
+```
+
+$MSW(2, 3)$:
+
+$$
+X_t = \begin{cases}
+`r regStr1` + \varepsilon_t &\quad \text{if } s_t = 1 \\
+`r regStr2` + \varepsilon_t &\quad \text{if } s_t = 2 \\
+`r regStr3` + \varepsilon_t &\quad \text{if } s_t = 3
+\end{cases} \\ \quad \hat\sigma_{\varepsilon, 1}^2 = `r ss1` \ , \ \hat\sigma_{\varepsilon, 2}^2 = `r ss2` \ , \ \hat\sigma_{\varepsilon, 3}^2 = `r ss3`
+$$
+
+## 9 Artificial Neural Networks
+
+Popular in different applications of machine learning, the last type of models we will use are neural networks. Their popularity stems from the fact that they can
+approximate almost any nonlinear function with arbitrary precision. It is usually the case, that a neural network becomes a black box, trained to perform a certain
+task, oblivious to any possible internal dynamics that could be described for the data (like in the case of SETAR, STAR, and MSW's). 
+
+In this chapter, we will construct such models, perform diagnostics and predictions. On top of that we can visualize the nodes of the network.
+
+### 9.1 Estimation
+
+```{r}
+suppressMessages(pkgTest("forecast"))  
+
+set.seed(1000)
+( model_ann_auto <- nnetar(xt) )
+```
+
+The automatic detection in the `nnetar` method found the orders $(p,q)$ = `(2,2)`, where $q$ is the number of nodes.
+
+```{r, fig.height=4, fig.width=7}
+par(mfrow=c(1,1))
+sapply(1:10, function(x) sum(nnetar(xt, p=2, size=x)$residuals^2, na.rm = T)) %>% 
+  plot(xlab="q", ylab="RSS", type="b")
+
+#rss_q <- sapply(1:10, function(x) sum(nnetar(xt, p=2, size=x)$residuals^2, na.rm = T))
+#which.min(diff(rss_q))
+```
+
+Taking a look at the graph with plotted `RSS` of `nnetar` 's, the steepest drop in the value is observed at $q=2$ which corresponds
+to the result of an automatic search.
+
+```{r}
+( model_ann <- nnetar(xt, p=2, size=2) )
+```
+
+### 9.2 Diagnostics
+
+First, we plot the test sample fit:
+
+```{r, fig.height=4, fig.width=9}
+plot(xt, ylab="", main="In-sample fit", type="b", xlab="t")
+lines(model_ann$fitted, col=rgb(0,0,0.9,0.7), lwd=2)
+legend("bottomright", legend=c("data","ANN(2,2)"), lty=1, lwd=2, col=c(1,rgb(0,0,0.9,0.7)), pch=c(1,NA))
+```
+
+For demonstration purposes, we can plot a stochastic simulation of the model data:
+
+```{r, fig.height=4, fig.width=9}
+plot(dat$time[1:length(xt)], simulate(model_ann, nsim=length(xt)),type="l", lwd=2, col=rgb(0,0,0,0.7),
+     ylab="",xlab="time",main="Auto model simulation", ylim=c(-1,1))
+lines(simulate(model_ann, nsim=length(xt)) ~ dat$time[1:length(xt)],col=rgb(0.9,0.2,0.1,0.7), lwd=2)
+```
+
+```{r, fig.height=4, fig.width=9}
+plot(dat$time[1:length(xt)], lwd=2, col=rgb(0,0,0,0.7),
+     simulate(model_ann,nsim=length(xt),innov=replicate(length(xt),0)), main="determ. sim",type="l",ylab="",xlab="time")
+```
+
+We notice that the deterministic simulation of the chosen model seems to stabilize on an equilibrium of `~0.15`.
+
+### 9.3 Predictions
+
+```{r, fig.height=3.6, fig.width=9}
+fcast_ann <- forecast(model_ann, PI=TRUE, h=length(x_eval), npaths=100)
+plot(fcast_ann, main="Multistep ANN(2,2) forecast", lwd=2, col=rgb(0,0,0,0.7))
+lines(c(rep(NA, length(xt)-1), xt[length(xt)], x_eval), lwd=2, col=rgb(0,0,0,0.7))
+```
+
+```{r, fig.height=3.6, fig.width=9}
+fit_ann <- nnetar(c(xt, x_eval), model=model_ann)
+one_step_ann <- tail(fitted(fit_ann),length(x_eval))
+qLANN <- (one_step_ann + quantile(na.omit(model_ann$residuals), 0.1))
+qHANN <- (one_step_ann + quantile(na.omit(model_ann$residuals), 0.9))
+eval_time <- dat$time[length(xt):(length(xt) + length(x_eval))]
+
+plot(dat$time[1:(length(xt) + length(x_eval))], c(xt, x_eval), ylim=c(-1,1), type="l",ylab="time", xlab="",main="One-step ANN(2,2) forecast", lwd=2, col=rgb(0,0,0,0.7))
+lines(eval_time, c(xt[length(xt)], one_step_ann), lwd=2, col=rgb(0,0,0.99,0.7))
+polygon(x = c(eval_time, rev(eval_time)), y = c(c(xt[length(xt)], qLANN), rev(c(xt[length(xt)], qHANN))), col=adjustcolor("blue", alpha.f = 0.2),border = F)
+```
+
+### 9.4 Visualisation of a Neural Network
+
+```{r}
+suppressMessages(pkgTest("neuralnet"))
+test_ann <- {}
+test_ann$width <- tail(xt, length(xt)-2)
+test_ann$lag1 <- xt[2:(length(xt)-1)]
+test_ann$lag2 <- xt[1:(length(xt)-2)]
+NNtest <- neuralnet(width ~ lag1 + lag2, test_ann, hidden=2,linear.output = T)
+plot(NNtest, rep="best")
+
+gamma10 = 2.15099; gamma11 = -6.55571; gamma12 = 1.64279;
+gamma20 = -1.09858; gamma21 = 9.94937; gamma22 = -0.58115;
+
+X1 = -1; X2 = 1; # x-pts
+Y11 = -gamma10 / gamma12 - gamma11 / gamma12 / X1; Y12 = -gamma10 / gamma12 - gamma11 / gamma12 / X2; # line1 y-pts
+Y21 = -gamma20 / gamma22 - gamma21 / gamma22 / X1; Y22 = -gamma20 / gamma22 - gamma21 / gamma22 / X2; # line2 y-pts
+
+beta0 = 0.15821; beta1 = -1.00004; beta2 = 1.26277
+```
+
+Skeleton of a neural network:
+
+```{r, fig.height=4, fig.width=7}
+suppressMessages(pkgTest("plot3D"))
+M <- mesh(x=seq(-1, 1, length.out=100), y=seq(-1, 1, length.out=100))
+
+G <- function(x){
+  out<-(1/(1+exp(-x)))
+}
+
+findZAuto<-function(x,y){
+  #1st hidden node
+  temp1<- 1 * NNtest$weights[[1]][[1]][1,1] + x * NNtest$weights[[1]][[1]][2,1] + y * NNtest$weights[[1]][[1]][3,1]
+  #2nd hidden node
+  temp2<- 1 * NNtest$weights[[1]][[1]][1,2] + x * NNtest$weights[[1]][[1]][2,2] + y * NNtest$weights[[1]][[1]][3,2]
+  #output
+  out<- 1 * NNtest$weights[[1]][[2]][[1]] + G(temp1) * NNtest$weights[[1]][[2]][[2]] + G(temp2) * NNtest$weights[[1]][[2]][[3]]
+}
+
+z <- with(M, findZAuto(x,y))
+contour(seq(-1, 1, length.out=100), seq(-1, 1, length.out=100), z, nlevels = 25)
+lines(x=c(X1,X2), y=c(Y11, Y12), col="brown3", lty="dashed", lwd=2)
+lines(x=c(X1,X2), y=c(Y21, Y22), col="dodgerblue", lty="dashed", lwd=2)
+legend("topleft", legend=c("gamma1 Yt", "gamma2 Yt"), col=c("brown3", "dodgerblue"), 
+           lty="dashed", lwd=2, cex=0.8)
+```
+
+The dashed lines on the contour plot above represent the subdivision of the predictor space according to the activations of logistic 
+functions $G_1$ and $G_2$, representing $G_j(\gamma_1^{\top} Y_t) = 1/2$.
+
+### 9.5 Conclusion
+
+The examined $ANN(2, 2)$ model can be formulated as follows:
+```{r}
+ann_sig2 = round(mean(model_ann$residuals^2),4)
+```
+
+$$
+X_t = `r beta0` + `r beta1` G(\gamma_1^{\top} Y_t) + `r beta2` G(\gamma_2^{\top} Y_t) + \varepsilon_t \\
+\gamma_1 = (`r gamma01`, `r gamma11`, `r gamma21`)^{\top} \ , \ \gamma_2 = (`r gamma02`, `r gamma12`, `r gamma22`)^{\top} \\
+Y_t = (1, X_{t-1}, X_{t-2})^{\top} \ , \ G(x) = 1 /(1 + \text{e}^{-x}) \\
+\hat\sigma_{\varepsilon}^2 = `r ann_sig2`
+$$
+
+
+## 10 Evaluation
+
+After covering four different classes of nonlinear models of stochastic processes, we proceed to compare the results by choosing the best candidates from each.
+There will be two criteria of choice, namely fit quality determined by residual variance $\sigma^2_{\varepsilon}$ and 1-step prediction MSE:
+
+```{r}
+SETAR2 <- model_cols_mse[1, 1:4]
+SETAR3 <- model_cols_mse[6, 1:4]
+STAR2 <- model_s_cols_mse[1, 1:4]
+STAR3 <- model_s_cols_mse[2, 1:4]
+MSW2 <- data.frame(cbind("MSW(2,1)", "NA", round(mean(fitmsm2@model$residuals^2),4), round(mean((x_eval - MSWPredic2)^2),4)))
+MSW3 <- data.frame(cbind("MSW(2,3)", "NA", round(mean(fitmsm3@model$residuals^2),4), round(mean((x_eval - MSWPredic3)^2),4)))
+ANN2 <- data.frame(cbind("ANN(2,2)", "NA", round(mean(na.omit(model_ann$residuals)^2),4), round(mean((x_eval - one_step_ann)^2),4)))
+cnames <- c("model", "BIC", "sigmaSq", "MSE(1-step)")
+names(MSW2) <- cnames; names(MSW3) <- cnames; names(ANN2) <- cnames
+# TABLE <- rbind(SETAR2, SETAR3, MSW2, MSW3, ANN2, stringsAsFactors=F)
+TABLE <- rbind(SETAR2, SETAR3, STAR2, STAR3, MSW2, MSW3, ANN2, stringsAsFactors=F)
+sigmaSqOrders <- order(TABLE[,3])
+cat("Models ordered by sigmaSq:\n")
+TABLE[sigmaSqOrders,]
+```
+```{r}
+mseOrders <- order(TABLE[,4])
+cat("Models ordered by prediction MSE:\n")
+TABLE[mseOrders,]
+```
+
+Afterwards we write the mathematical formulas for each chosen model:
+
+$SETAR(2,2,0.103)$:
+
+```{r}
+mod <- models[[ orders[1] ]]
+p <- mod$p; d <- mod$d; c <- round(mod$c, 4)
+phi <- round(mod$PhiParams, 4); se <- round(mod$PhiStErrors,4)
+ss <- round(mod$resSigmaSq, 4); ss1 <- round(mod$resSigmaSq1, 4); ss2 <- round(mod$resSigmaSq2, 4)
+```
+
+$$
+X_t = \begin{cases}
+(`r phi[2]` \pm `r se[2]`)X_{t-1} + (`r phi[3]` \pm `r se[3]`)X_{t-2} + \varepsilon_t &\quad\text{if } X_{t-`r d`} \leq `r c` \\
+(`r phi[4]` \pm `r se[4]`) + (`r phi[5]` \pm `r se[5]`)X_{t-1} + (`r phi[6]` \pm `r se[6]`)X_{t-2} + \varepsilon_t &\quad\text{if } X_{t-`r d`} > `r c` \\
+\end{cases} \quad \hat\sigma_{\varepsilon}^2 = `r ss` \ , \ \hat\sigma_{\varepsilon,1} = `r ss1` \ , \ \hat\sigma_{\varepsilon,2} = `r ss2`
+$$
+
+$SETAR(5,3,0.008,0.403)$:
+
+```{r}
+mod <- models[[ orders[6] ]]
+p <- mod$p; d <- mod$d; c <- round(mod$c, 4)
+phi <- round(mod$PhiParams, 4); se <- round(mod$PhiStErrors,4)
+
+Phi <- matrix(phi, nrow=3, byrow=T); Se <- matrix(se, nrow=3, byrow=T);
+phi1 <- Phi[1,]; phi2 <- Phi[2,]; phi3 <- Phi[3,]
+se1 <- Se[1,]; se2 <- Se[2,]; se3 <- Se[3,]
+ss <- round(mod$resSigmaSq, 4); ss1 <- round(mod$regSigmaSq[1], 4); ss2 <- round(mod$regSigmaSq[2], 4); ss3 <- round(mod$regSigmaSq[3], 4)
+
+regStr1 <- getRegimeString(phi1, se1, p)
+regStr2 <- getRegimeString(phi2, se2, p)
+regStr3 <- getRegimeString(phi3, se3, p)
+
+```
+
+$$
+X_t = \begin{cases}
+`r regStr1` + \varepsilon_t &\quad\text{if } X_{t-`r d`} \leq `r c[1]` \\
+`r regStr2` + \varepsilon_t &\quad\text{if }`r c[1]` < X_{t-`r d`} \leq `r c[2]` \\
+`r regStr3` + \varepsilon_t &\quad\text{if }`r X_{t-`r d`} > `r c[2]`
+\end{cases} \quad \hat\sigma_{\varepsilon}^2 = `r ss`
+$$
+
+$ \hat\sigma_{\varepsilon,1} = `r ss1` \ , \ \hat\sigma_{\varepsilon,2} = `r ss2`$
+
+$LSTAR(2,2,0.131,10)$:
+
+```{r}
+mod <- models_s[[ orders_s[1] ]]
+p <- mod$p; d <- mod$d; c <- round(mod$c, 4); gamma <- round(mod$gamma, 4);
+phi <- round(mod$PhiParams, 4); se <- round(mod$PhiStErrors,4)
+
+Phi <- matrix(phi, nrow=2, byrow=T); Se <- matrix(se, nrow=2, byrow=T);
+phi1 <- Phi[1,]; phi2 <- Phi[2,];
+se1 <- Se[1,]; se2 <- Se[2,];
+ss <- round(mod$resSigmaSq, 4);
+
+regStr1 <- getRegimeString(phi1, se1, p)
+regStr2 <- getRegimeString(phi2, se2, p)
+```
+
+$$
+X_t = \\
+(`r regStr1`) \ [1 - G_L(X_{t-`r d`}, `r c`, `r gamma`)] + \\ (`r regStr2`) \ G_L(X_{t-`r d`}, `r c`, `r gamma`) + \varepsilon_t
+\\ \quad \hat\sigma_{\varepsilon}^2 = `r ss`
+$$
+
+$LSTAR(2, 2, 0.192, 0.4, 10, 4)$:
+
+```{r}
+mod <- models_s3[[ orders_s3[1] ]]
+p <- mod$p; d <- mod$d; c <- round(mod$c, 4); gamma <- round(mod$gamma, 4);
+phi <- round(mod$PhiParams, 4); se <- round(mod$PhiStErrors,4)
+
+Phi <- matrix(phi, nrow=3, byrow=T); Se <- matrix(se, nrow=3, byrow=T);
+phi1 <- Phi[1,]; phi2 <- Phi[2,]; phi3 <- Phi[3,]
+se1 <- Se[1,]; se2 <- Se[2,]; se3 <- Se[3,]
+ss <- round(mod$resSigmaSq, 4);
+
+regStr1 <- getRegimeString(phi1, se1, p)
+regStr2 <- getRegimeString(phi2, se2, p)
+regStr3 <- getRegimeString(phi3, se3, p)
+```
+
+$$
+X_t = \\
+(`r regStr1`) \ [1 - G_L(X_{t-`r d`}, `r c[1]`, `r gamma[1]`)] + \\ 
+(`r regStr2`) \ [G_L(X_{t-`r d`}, `r c[1]`, `r gamma[1]`) - G_L(X_{t-`r d`}, `r c[2]`, `r gamma[2]`)] + \\
+(`r regStr3`) \ G_L(X_{t-`r d`}, `r c[2]`, `r gamma[2]`) + \varepsilon_t
+\\ \quad \hat\sigma_{\varepsilon}^2 = `r ss`
+$$
+
+```{r}
+phi <- round(fitmsm2@Coef,4)
+se <- round(fitmsm2@seCoef,4)
+
+ss1 <- mean(msmResid(fitmsm2, regime=1)^2)
+ss2 <- mean(msmResid(fitmsm2, regime=2)^2)
+
+regStr1 <- getRegimeString(phi[1,], se[1,], p=1)
+regStr2 <- getRegimeString(phi[2,], se[2,], p=1)
+```
+
+$MSW(2, 1)$:
+
+$$
+X_t = \begin{cases}
+`r regStr1` + \varepsilon_t &\quad \text{if } s_t = 1 \\
+`r regStr2` + \varepsilon_t &\quad \text{if } s_t = 2
+\end{cases} \\ \quad \hat\sigma_{\varepsilon, 1}^2 = `r ss1` \ , \ \hat\sigma_{\varepsilon, 2}^2 = `r ss2`
+$$
+
+```{r}
+phi <- round(fitmsm3@Coef,4)
+se <- round(fitmsm3@seCoef,4)
+
+ss1 <- mean(msmResid(fitmsm3, regime=1)^2)
+ss2 <- mean(msmResid(fitmsm3, regime=2)^2)
+ss3 <- mean(msmResid(fitmsm3, regime=3)^2)
+
+regStr1 <- getRegimeString(phi[1,], se[1,], p=2)
+regStr2 <- getRegimeString(phi[2,], se[2,], p=2)
+regStr3 <- getRegimeString(phi[3,], se[3,], p=2)
+```
+
+$MSW(2, 3)$:
+$$
+X_t = \begin{cases}
+`r regStr1` + \varepsilon_t &\quad \text{if } s_t = 1 \\
+`r regStr2` + \varepsilon_t &\quad \text{if } s_t = 2 \\
+`r regStr3` + \varepsilon_t &\quad \text{if } s_t = 3
+\end{cases} \\ \quad \hat\sigma_{\varepsilon, 1}^2 = `r ss1` \ , \ \hat\sigma_{\varepsilon, 2}^2 = `r ss2` \ , \ \hat\sigma_{\varepsilon, 3}^2 = `r ss3`
+$$
+
+$ANN(2, 2)$:
+
+$$
+X_t = `r beta0` + `r beta1` G(\gamma_1^{\top} Y_t) + `r beta2` G(\gamma_2^{\top} Y_t) + \varepsilon_t \\
+\gamma_1 = (`r gamma01`, `r gamma11`, `r gamma21`)^{\top} \ , \ \gamma_2 = (`r gamma02`, `r gamma12`, `r gamma22`)^{\top} \\
+Y_t = (1, X_{t-1}, X_{t-2})^{\top} \ , \ G(x) = 1 /(1 + \text{e}^{-x}) \\
+\hat\sigma_{\varepsilon}^2 = `r ann_sig2`
+$$
+
